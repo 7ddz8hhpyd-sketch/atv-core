@@ -140,7 +140,6 @@ jobs:
 
       - name: Build and Sign Android APK
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
           MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
         run: |
           chmod +x ./scripts/*.sh

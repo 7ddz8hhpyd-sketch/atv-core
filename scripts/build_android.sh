@@ -20,6 +20,19 @@ if [ -z "$ANDROID_HOME" ]; then
     fi
 fi
 
+# Auto-detect Android NDK if ANDROID_NDK_HOME is not set or invalid
+if [ -z "$ANDROID_NDK_HOME" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+    if [ -n "$ANDROID_NDK_ROOT" ] && [ -d "$ANDROID_NDK_ROOT" ]; then
+        export ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
+    elif [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+        LATEST_NDK=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 | sort -V | tail -n1)
+        if [ -n "$LATEST_NDK" ]; then
+            export ANDROID_NDK_HOME="$LATEST_NDK"
+        fi
+    fi
+fi
+echo "Using ANDROID_NDK_HOME: ${ANDROID_NDK_HOME:-<unset>}"
+
 echo "=== Building atv-android native library ==="
 
 cd "$ROOT_DIR"
