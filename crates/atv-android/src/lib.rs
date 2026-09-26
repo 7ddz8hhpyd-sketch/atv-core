@@ -1,5 +1,6 @@
 //! JNI bindings for Android TV: runs AtvServer and dispatches callbacks into Kotlin/Java.
 
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -116,6 +117,9 @@ pub extern "system" fn Java_com_corvofeng_fakeatv_AtvNative_nativeStartServer(
     _class: JClass,
     name: JString,
     pin: jint,
+    device_id: JString,
+    server_id: JString,
+    local_ip: JString,
     callback: JObject,
 ) -> jboolean {
     let mut state_guard = match SERVER_STATE.lock() {
@@ -132,6 +136,24 @@ pub extern "system" fn Java_com_corvofeng_fakeatv_AtvNative_nativeStartServer(
         Ok(s) => s.into(),
         Err(_) => "Android TV".to_string(),
     };
+
+    let device_id_str: Option<String> = env
+        .get_string(&device_id)
+        .ok()
+        .map(|s| s.into())
+        .filter(|s: &String| !s.is_empty());
+
+    let server_id_str: Option<String> = env
+        .get_string(&server_id)
+        .ok()
+        .map(|s| s.into())
+        .filter(|s: &String| !s.is_empty());
+
+    let local_ip_str: Option<String> = env
+        .get_string(&local_ip)
+        .ok()
+        .map(|s| s.into())
+        .filter(|s: &String| !s.is_empty());
 
     let jvm = match env.get_java_vm() {
         Ok(vm) => vm,
@@ -161,6 +183,14 @@ pub extern "system" fn Java_com_corvofeng_fakeatv_AtvNative_nativeStartServer(
     let mut config = AtvConfig::default();
     config.name = device_name;
     config.pin = pin as u32;
+    config.device_id = device_id_str;
+    config.server_identifier = server_id_str;
+    if let Some(ref s) = local_ip_str {
+        if let Ok(ip) = s.parse::<Ipv4Addr>() {
+            info!("using explicit local IP from Android: {ip}");
+            config.ip = Some(ip);
+        }
+    }
 
     let server_res = runtime.block_on(async {
         AtvServer::start(config, delegate).await

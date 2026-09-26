@@ -16,7 +16,15 @@ object AtvNative {
         fun onEvent(kind: String, detail: String)
     }
 
-    external fun nativeStartServer(name: String, pin: Int, callback: Callback): Boolean
+    external fun nativeStartServer(
+        name: String,
+        pin: Int,
+        deviceId: String,
+        serverId: String,
+        localIp: String,
+        callback: Callback
+    ): Boolean
+
     external fun nativeStopServer()
     external fun nativeIsRunning(): Boolean
 }

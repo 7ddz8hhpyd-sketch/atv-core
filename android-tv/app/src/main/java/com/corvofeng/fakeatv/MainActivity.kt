@@ -1,5 +1,6 @@
 package com.corvofeng.fakeatv
 
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,8 @@ import android.provider.Settings
 import android.text.format.Formatter
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
@@ -59,8 +62,29 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnAccessibility.setOnClickListener {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            startActivity(intent)
+            if (RemoteController.isHardwareAvailable) {
+                Toast.makeText(this, "Hardware remote driver (/dev/input/event0) is active!\nNo accessibility service needed.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (AtvAccessibilityService.isServiceRunning) {
+                Toast.makeText(this, "Accessibility Service is already enabled", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            try {
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                AlertDialog.Builder(this)
+                    .setTitle("Accessibility Settings")
+                    .setMessage(
+                        "This device does not have a system Accessibility Settings page.\n\n" +
+                        "Enable via ADB:\n\n" +
+                        "adb shell settings put secure enabled_accessibility_services com.corvofeng.fakeatv/.AtvAccessibilityService\n" +
+                        "adb shell settings put secure accessibility_enabled 1"
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
         }
 
         // Auto-start service on app launch
@@ -86,9 +110,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAtvService() {
+        val deviceName = DeviceInfo.getDeviceName(this)
         val intent = Intent(this, AtvService::class.java).apply {
             action = AtvService.ACTION_START
-            putExtra(AtvService.EXTRA_NAME, "Android TV")
+            putExtra(AtvService.EXTRA_NAME, deviceName)
             putExtra(AtvService.EXTRA_PIN, 1111)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -100,16 +125,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUi() {
         val running = AtvService.isRunning
-        tvStatus.text = if (running) "Status: Running" else "Status: Stopped"
+        val deviceName = DeviceInfo.getDeviceName(this)
+        val deviceId = DeviceInfo.getDeviceId(this)
+        tvStatus.text = if (running) "$deviceName: Running" else "$deviceName: Stopped"
         tvStatus.setTextColor(if (running) 0xFF4CAF50.toInt() else 0xFFF44336.toInt())
         btnToggle.text = if (running) "Stop Server" else "Start Server"
 
-        tvIp.text = "IP Address: ${getWifiIpAddress()}"
+        tvIp.text = "IP: ${getWifiIpAddress()}   ID: $deviceId"
         tvPin.text = "Pairing PIN: 1111"
 
+        val hwOk = RemoteController.isHardwareAvailable
         val accessOk = AtvAccessibilityService.isServiceRunning
-        tvAccessibility.text = "Accessibility Service: " + if (accessOk) "Enabled (Full Control)" else "Disabled (Tap below to enable)"
-        tvAccessibility.setTextColor(if (accessOk) 0xFF4CAF50.toInt() else 0xFFFF9800.toInt())
+        if (hwOk) {
+            tvAccessibility.text = "Control Mode: Hardware Remote Driver (/dev/input/event0) Active"
+            tvAccessibility.setTextColor(0xFF4CAF50.toInt())
+            btnAccessibility.text = "Hardware Driver Active"
+        } else {
+            tvAccessibility.text = "Accessibility Service: " + if (accessOk) "Enabled (Full Control)" else "Disabled (Tap below to enable)"
+            tvAccessibility.setTextColor(if (accessOk) 0xFF4CAF50.toInt() else 0xFFFF9800.toInt())
+            btnAccessibility.text = "Accessibility Settings"
+        }
     }
 
     private fun appendLog(line: String) {
@@ -120,18 +155,7 @@ class MainActivity : AppCompatActivity() {
         tvLog.text = logEntries.joinToString("\n")
     }
 
-    @Suppress("DEPRECATION")
     private fun getWifiIpAddress(): String {
-        return try {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            val ip = wm?.connectionInfo?.ipAddress ?: 0
-            if (ip != 0) {
-                Formatter.formatIpAddress(ip)
-            } else {
-                "Unknown"
-            }
-        } catch (e: Exception) {
-            "Unknown"
-        }
+        return DeviceInfo.getLocalIpAddress(this) ?: "Unknown"
     }
 }

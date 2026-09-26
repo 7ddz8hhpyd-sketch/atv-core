@@ -5,8 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -30,6 +35,7 @@ class AtvService : Service(), AtvNative.Callback {
         const val EXTRA_EVENT_TYPE = "extra_event_type"
         const val EXTRA_EVENT_DETAIL = "extra_event_detail"
 
+        @Volatile
         var isRunning = false
             private set
     }
@@ -37,9 +43,80 @@ class AtvService : Service(), AtvNative.Callback {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    private var currentName: String? = null
+    private var currentPin: Int = 1111
+
+    @Volatile
+    private var isStopping = false
+    private var startThread: Thread? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var screenReceiver: BroadcastReceiver? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        protectProcess()
+        registerNetworkCallback()
+        registerScreenReceiver()
+    }
+
+    private fun protectProcess() {
+        try {
+            val uri = android.net.Uri.parse("content://com.dangbei.dangbeiref.data/process_protect_list_info")
+            val cv = android.content.ContentValues().apply {
+                put("appPackageName", packageName)
+                put("appName", "FakeAtv")
+                put("appVersion", 1)
+            }
+            contentResolver.insert(uri, cv)
+            Log.i(TAG, "Registered in Dangbei process protect list")
+        } catch (_: Exception) {
+            // Ignore if content provider not available
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        Log.i(TAG, "Network became available on Android TV")
+                        if (!isRunning && !isStopping) {
+                            val name = currentName ?: DeviceInfo.getDeviceName(this@AtvService)
+                            startServer(name, currentPin)
+                        }
+                    }
+                }
+                cm.registerDefaultNetworkCallback(callback)
+                networkCallback = callback
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register network callback", e)
+        }
+    }
+
+    private fun registerScreenReceiver() {
+        try {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val action = intent?.action ?: return
+                    Log.i(TAG, "Received system wake/screen event: $action")
+                    if (!isRunning && !isStopping) {
+                        val name = currentName ?: DeviceInfo.getDeviceName(this@AtvService)
+                        startServer(name, currentPin)
+                    }
+                }
+            }
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            registerReceiver(receiver, filter)
+            screenReceiver = receiver
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register screen receiver", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -50,7 +127,7 @@ class AtvService : Service(), AtvNative.Callback {
                 stopSelf()
             }
             else -> {
-                val name = intent?.getStringExtra(EXTRA_NAME) ?: "Android TV"
+                val name = intent?.getStringExtra(EXTRA_NAME) ?: DeviceInfo.getDeviceName(this)
                 val pin = intent?.getIntExtra(EXTRA_PIN, 1111) ?: 1111
                 startServer(name, pin)
             }
@@ -58,33 +135,98 @@ class AtvService : Service(), AtvNative.Callback {
         return START_STICKY
     }
 
+    @Synchronized
     private fun startServer(name: String, pin: Int) {
+        currentName = name
+        currentPin = pin
+        isStopping = false
+
         if (isRunning) return
 
-        startForeground(NOTIFICATION_ID, buildNotification(name, pin))
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(name, pin),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(name, pin))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to startForeground", e)
+        }
 
         // Acquire MulticastLock to allow Bonjour mDNS discovery on Android TV Wi-Fi
-        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        multicastLock = wm?.createMulticastLock("FakeAtvMulticastLock")?.apply {
-            setReferenceCounted(true)
-            acquire()
+        if (multicastLock == null || !multicastLock!!.isHeld) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            multicastLock = wm?.createMulticastLock("FakeAtvMulticastLock")?.apply {
+                setReferenceCounted(true)
+                acquire()
+            }
         }
 
-        // Acquire WakeLock to keep networking responsive
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-        wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FakeAtv:WakeLock")?.apply {
-            acquire(24 * 60 * 60 * 1000L) // 24 hours
+        // Acquire WakeLock to keep networking responsive (indefinite for TV)
+        if (wakeLock == null || !wakeLock!!.isHeld) {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FakeAtv:WakeLock")?.apply {
+                acquire()
+            }
         }
 
-        Log.i(TAG, "Starting native server: $name (PIN $pin)")
-        Thread {
-            val started = AtvNative.nativeStartServer(name, pin, this)
-            isRunning = started
-            broadcast("ServerStatus", if (started) "running" else "failed")
-        }.start()
+        val deviceId = DeviceInfo.getDeviceId(this)
+        val serverId = DeviceInfo.getServerIdentifier(this, deviceId)
+
+        if (startThread?.isAlive == true) {
+            return
+        }
+
+        startThread = Thread {
+            var attempts = 0
+            val maxAttempts = 60 // 60 attempts * 2.5s = 150 seconds (handles boot Wi-Fi delay)
+            while (!isRunning && !isStopping && attempts < maxAttempts) {
+                attempts++
+                val localIp = DeviceInfo.getLocalIpAddress(this)
+                val hasValidIp = !localIp.isNullOrBlank()
+
+                if (hasValidIp) {
+                    Log.i(TAG, "Attempt $attempts: starting native server with IP $localIp (Name: $name, PIN: $pin)")
+                    val started = AtvNative.nativeStartServer(name, pin, deviceId, serverId, localIp!!, this)
+                    if (started) {
+                        isRunning = true
+                        broadcast("ServerStatus", "running")
+                        Log.i(TAG, "Native server started successfully on attempt $attempts with IP $localIp")
+                        break
+                    } else {
+                        Log.w(TAG, "nativeStartServer returned false on attempt $attempts, will retry in 2.5s")
+                    }
+                } else {
+                    Log.i(TAG, "Waiting for network IP before starting server (attempt $attempts/$maxAttempts)...")
+                }
+
+                try {
+                    Thread.sleep(2500)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+
+            if (!isRunning && !isStopping) {
+                Log.e(TAG, "Failed to start native server after $attempts attempts")
+                broadcast("ServerStatus", "failed")
+            }
+        }.apply {
+            this.name = "AtvServerStartThread"
+            start()
+        }
     }
 
+    @Synchronized
     private fun stopServer() {
+        isStopping = true
+        startThread?.interrupt()
+        startThread = null
+
         if (!isRunning) return
         Log.i(TAG, "Stopping native server")
         AtvNative.nativeStopServer()
@@ -101,7 +243,10 @@ class AtvService : Service(), AtvNative.Callback {
 
     override fun onButton(name: String) {
         Log.i(TAG, "onButton: $name")
-        AtvAccessibilityService.instance?.handleButton(name)
+        RemoteController.handleButton(name)
+        if (!RemoteController.isHardwareAvailable) {
+            AtvAccessibilityService.instance?.handleButton(name)
+        }
         broadcast("Button", name)
     }
 
@@ -166,5 +311,20 @@ class AtvService : Service(), AtvNative.Callback {
     override fun onDestroy() {
         super.onDestroy()
         stopServer()
+
+        networkCallback?.let {
+            try {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(it)
+            } catch (_: Exception) {}
+            networkCallback = null
+        }
+
+        screenReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+            screenReceiver = null
+        }
     }
 }

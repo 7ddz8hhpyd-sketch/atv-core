@@ -3,6 +3,7 @@ package com.corvofeng.fakeatv
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.content.Intent
 import android.graphics.Path
 import android.os.Build
 import android.util.DisplayMetrics
@@ -42,6 +43,26 @@ class AtvAccessibilityService : AccessibilityService() {
             pointerX = screenWidth / 2f
             pointerY = screenHeight / 2f
             Log.i(TAG, "Screen resolution: ${screenWidth}x${screenHeight}")
+        }
+
+        // Auto-start AtvService if not already running
+        if (!AtvService.isRunning) {
+            val deviceName = DeviceInfo.getDeviceName(this)
+            val serviceIntent = Intent(this, AtvService::class.java).apply {
+                action = AtvService.ACTION_START
+                putExtra(AtvService.EXTRA_NAME, deviceName)
+                putExtra(AtvService.EXTRA_PIN, 1111)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+                Log.i(TAG, "AtvService auto-started from AtvAccessibilityService")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start AtvService from AtvAccessibilityService", e)
+            }
         }
     }
 

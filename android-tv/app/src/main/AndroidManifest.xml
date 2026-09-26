@@ -17,10 +17,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.QUICKBOOT_POWERON" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/banner"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.FakeAtv"
@@ -41,12 +44,14 @@
             android:name=".AtvService"
             android:enabled="true"
             android:exported="false"
+            android:directBootAware="true"
             android:foregroundServiceType="connectedDevice" />
 
         <service
             android:name=".AtvAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -58,9 +63,18 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="false">
-            <intent-filter>
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="com.dangbei.action.WAKEUP" />
+                <action android:name="com.mstar.android.intent.action.SUSPEND_RESUME" />
+                <action android:name="com.droidlogic.intent.action.STANDBY_WAKEUP" />
             </intent-filter>
         </receiver>
 

@@ -40,6 +40,10 @@ pub struct AtvConfig {
     pub mouse_mode: bool,
     /// Port for Debug Web UI & Inspector (None to disable, default Some(8765)).
     pub ui_port: Option<u16>,
+    /// Hardware / MAC-like identifier (e.g. "AA:BB:CC:DD:EE:01").
+    pub device_id: Option<String>,
+    /// Unique UUID (e.g. "2E468249-2F22-4416-86C8-50BF22D4F24D").
+    pub server_identifier: Option<String>,
 }
 
 impl Default for AtvConfig {
@@ -50,6 +54,8 @@ impl Default for AtvConfig {
             ip: None,
             mouse_mode: false,
             ui_port: Some(8765),
+            device_id: None,
+            server_identifier: None,
         }
     }
 }
@@ -125,8 +131,16 @@ impl AtvServer {
             }
         }
 
-        let unique_id = SERVER_IDENTIFIER.replace('-', "");
-        let device_id = "AA:BB:CC:DD:EE:01";
+        let server_id = config
+            .server_identifier
+            .as_deref()
+            .unwrap_or(SERVER_IDENTIFIER);
+        let unique_id = server_id.replace('-', "");
+        let device_id = config
+            .device_id
+            .as_deref()
+            .unwrap_or("AA:BB:CC:DD:EE:01");
+        let rpha = device_id.replace(':', "");
 
         let services: Vec<(&str, u16, Vec<(&str, &str)>)> = vec![
             (
@@ -146,7 +160,7 @@ impl AtvServer {
                 COMPANION_PORT,
                 vec![
                     ("rpMac", "1"),
-                    ("rpHA", "D851F0A4E5C9"),
+                    ("rpHA", rpha.as_str()),
                     ("rpHN", "B7359A9BCBAB"),
                     ("rpVr", SOURCE_VERSION),
                     ("rpMd", DEVICE_MODEL),
@@ -166,7 +180,7 @@ impl AtvServer {
                     ("model", DEVICE_MODEL),
                     ("srcvers", SOURCE_VERSION),
                     ("vv", "2"),
-                    ("pi", SERVER_IDENTIFIER),
+                    ("pi", server_id),
                     ("pk", "6b8b4567f85b7f54a3e1c0a93f0a9e2c"),
                     ("name", config.name.as_str()),
                 ],
@@ -318,11 +332,25 @@ impl AtvServer {
 pub fn detect_local_ip() -> Result<Ipv4Addr> {
     let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
     // A UDP connect sends nothing; it asks the kernel which route it would use.
-    sock.connect((Ipv4Addr::new(192, 0, 2, 1), 9))?;
-    match sock.local_addr()?.ip() {
-        std::net::IpAddr::V4(ip) => Ok(ip),
-        _ => Ok(Ipv4Addr::LOCALHOST),
+    if let Ok(()) = sock.connect((Ipv4Addr::new(192, 0, 2, 1), 9)) {
+        if let Ok(addr) = sock.local_addr() {
+            if let std::net::IpAddr::V4(ip) = addr.ip() {
+                if !ip.is_unspecified() && !ip.is_loopback() {
+                    return Ok(ip);
+                }
+            }
+        }
     }
+    if let Ok(()) = sock.connect((Ipv4Addr::new(8, 8, 8, 8), 53)) {
+        if let Ok(addr) = sock.local_addr() {
+            if let std::net::IpAddr::V4(ip) = addr.ip() {
+                if !ip.is_unspecified() && !ip.is_loopback() {
+                    return Ok(ip);
+                }
+            }
+        }
+    }
+    Err(Error::Protocol("unable to detect local IPv4 address".into()))
 }
 
 async fn companion_loop(
