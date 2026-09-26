@@ -80,7 +80,7 @@ pub trait AtvDelegate: Send + Sync + 'static {
 
     /// Query the current touchpad settings: (speed_factor, acceleration_enabled, verbose_events_enabled).
     fn get_touchpad_settings(&self) -> (f64, bool, bool) {
-        (1.0, true, false)
+        (crate::settings::DEFAULT_MOUSE_SPEED, true, false)
     }
 
     /// Set mouse pointer speed factor and acceleration toggle (legacy helper).

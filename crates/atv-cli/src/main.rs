@@ -35,7 +35,7 @@ fn usage() -> ! {
            --ip <IPV4>                    Local IPv4 to advertise (auto-detected if omitted)\n\
            --mouse                        Initial mode: Trackpad mouse (default on macOS)\n\
            --direction, --dpad            Initial mode: Direction keys (D-pad) (default on other targets)\n\
-           --speed <FLOAT>                Initial mouse speed multiplier (default: 1.0)\n\
+           --speed <FLOAT>                Initial mouse speed multiplier (default: 0.5)\n\
            --verbose-events               Enable verbose terminal logging for buttons and events (default: quiet debug)\n\
            --ui-port <PORT>               Debug Web UI port (default: 8765)\n\
            --no-ui                        Disable Debug Web UI\n\
@@ -67,6 +67,7 @@ fn parse_args() -> CliArgs {
     let mut open_browser = false;
     let mut verbose_events = false;
     let mut mouse_mode_explicit = false;
+    let mut mouse_speed_explicit = false;
     let mut prompt_accessibility = true;
 
     let mut args = std::env::args().skip(1);
@@ -124,6 +125,7 @@ fn parse_args() -> CliArgs {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or_else(|| usage());
                 config.mouse_speed = sp;
+                mouse_speed_explicit = true;
             }
             "--verbose-events" | "--verbose" => verbose_events = true,
             "--no-prompt" => prompt_accessibility = false,
@@ -141,10 +143,15 @@ fn parse_args() -> CliArgs {
         }
     }
 
+    if mouse_speed_explicit {
+        atv_core::UserSettings::update_speed(config.mouse_speed);
+    }
+
     if !mouse_mode_explicit {
         #[cfg(target_os = "macos")]
         if target == Target::Mac {
-            config.mouse_mode = true;
+            let settings = atv_core::UserSettings::load();
+            config.mouse_mode = settings.mouse_mode.unwrap_or(true);
         }
     }
 
@@ -181,11 +188,18 @@ async fn main() {
         Target::Mac => {
             #[cfg(target_os = "macos")]
             {
+                let settings = atv_core::UserSettings::load();
+                let accel = settings.mouse_accel.unwrap_or(true);
+                let verbose = if args.verbose_events {
+                    true
+                } else {
+                    settings.verbose_events.unwrap_or(false)
+                };
                 Arc::new(macos::MacDelegate::new_with_full_settings(
                     mouse_mode.clone(),
                     args.config.mouse_speed,
-                    true,
-                    args.verbose_events,
+                    accel,
+                    verbose,
                     args.prompt_accessibility,
                 ))
             }

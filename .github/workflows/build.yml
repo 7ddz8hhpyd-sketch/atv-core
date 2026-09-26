@@ -59,7 +59,8 @@ jobs:
             ./scripts/import_certificate.sh /tmp/runner_cert.p12 "$CERT_PASSWORD"
             rm -f /tmp/runner_cert.p12
           else
-            echo "⚠️ No signing certificate secret found, falling back to ad-hoc signing."
+            echo "❌ 致命错误: 未检测到证书 Secret (MACOS_CERT_P12_BASE64)！请在 GitHub 仓库中配置该 Secret。"
+            exit 1
           fi
 
       - name: Build AppleTVRemote.app and AppleTVRemote.dmg

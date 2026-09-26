@@ -49,9 +49,8 @@ openssl pkcs12 -in "$P12_FILE" -nokeys -out "$TEMP_CERT" -passin "pass:$PASSWORD
 if [ -s "$TEMP_CERT" ]; then
     echo "🛡️  配置代码签名信任策略..."
     if [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; then
-        # CI 无头环境中，普通用户修改用户级信任配置会弹出 GUI 授权弹窗导致挂起
-        # 使用 sudo + -d 导入系统管理域信任，避免任何交互式弹窗
-        sudo security add-trusted-cert -d -r trustRoot -p codeSign "$TEMP_CERT" || true
+        # CI 无头环境中，使用 sudo 将根证书加入系统钥匙串并信任，无弹窗且全局生效
+        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$TEMP_CERT" || true
     else
         security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TEMP_CERT" >/dev/null 2>&1 || true
     fi
@@ -60,5 +59,11 @@ rm -f "$TEMP_CERT"
 
 echo "=================================================="
 echo "🎉 证书导入完成！当前可用的代码签名身份:"
-security find-identity -v -p codesigning "$KEYCHAIN" || true
+security find-identity -p codesigning "$KEYCHAIN"
 echo "=================================================="
+
+# 严格校验：确保钥匙串中至少存在一个可用的代码签名身份
+if ! security find-identity -p codesigning "$KEYCHAIN" | grep -q "[0-9])"; then
+    echo "❌ 致命错误: 证书导入失败，钥匙串中未找到任何代码签名身份！"
+    exit 1
+fi

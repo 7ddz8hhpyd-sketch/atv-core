@@ -58,7 +58,7 @@ rm -f "$SWIFT_BIN"
 find_best_identity() {
     # 1. 优先使用环境变量指定的证书
     if [ -n "$CODESIGN_IDENTITY" ]; then
-        if security find-identity -v -p codesigning | grep -q "\"$CODESIGN_IDENTITY\""; then
+        if security find-identity -p codesigning | grep -q "\"$CODESIGN_IDENTITY\""; then
             echo "$CODESIGN_IDENTITY"
             return
         fi
@@ -81,13 +81,13 @@ find_best_identity() {
     fi
 
     # 4. 匹配本地通用持久化自签证书 (Corvo Development)
-    if security find-identity -v -p codesigning | grep -q "\"Corvo Development\""; then
+    if security find-identity -p codesigning | grep -q "\"Corvo Development\""; then
         echo "Corvo Development"
         return
     fi
 
     # 5. 兼容历史项目证书 (AppleTVRemote Development)
-    if security find-identity -v -p codesigning | grep -q "\"AppleTVRemote Development\""; then
+    if security find-identity -p codesigning | grep -q "\"AppleTVRemote Development\""; then
         echo "AppleTVRemote Development"
         return
     fi
@@ -97,19 +97,24 @@ find_best_identity() {
 
 SIGN_IDENTITY=$(find_best_identity)
 
-if [ -n "$SIGN_IDENTITY" ]; then
-    echo "🔏 Signing application with certificate: \"$SIGN_IDENTITY\"..."
-    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.corvofeng.AppleTVRemote.helper" "$APP_BUNDLE/Contents/MacOS/atv-cli"
-    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.corvofeng.AppleTVRemote" "$APP_BUNDLE/Contents/MacOS/AppleTVRemote"
-    codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
-    echo "✨ Signed successfully with \"$SIGN_IDENTITY\"! Permissions will survive rebuilds."
-else
-    echo "🔏 Signing application bundle (ad-hoc fallback)..."
-    echo "💡 提示: 可运行 ./scripts/setup_certificate.sh 创建本地持久化证书，重编后权限永不失效。"
-    codesign --force --sign - --identifier "com.corvofeng.AppleTVRemote.helper" "$APP_BUNDLE/Contents/MacOS/atv-cli"
-    codesign --force --sign - --identifier "com.corvofeng.AppleTVRemote" "$APP_BUNDLE/Contents/MacOS/AppleTVRemote"
-    codesign --force --sign - "$APP_BUNDLE"
+if [ -z "$SIGN_IDENTITY" ]; then
+    echo "=========================================="
+    echo "❌ 致命错误: 未检测到任何可用的代码签名证书！"
+    echo "已终止构建。请运行 ./scripts/setup_certificate.sh 配置证书，或检查 CI Secret。"
+    echo "当前钥匙串中可用身份如下:"
+    security find-identity -p codesigning || true
+    echo "=========================================="
+    exit 1
 fi
+
+echo "🔏 Signing application with certificate: \"$SIGN_IDENTITY\"..."
+codesign --force --sign "$SIGN_IDENTITY" --identifier "com.corvofeng.AppleTVRemote.helper" "$APP_BUNDLE/Contents/MacOS/atv-cli"
+codesign --force --sign "$SIGN_IDENTITY" --identifier "com.corvofeng.AppleTVRemote" "$APP_BUNDLE/Contents/MacOS/AppleTVRemote"
+codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+echo "✨ Signed successfully with \"$SIGN_IDENTITY\"! Permissions will survive rebuilds."
+
+echo "🔍 验证代码签名详情:"
+codesign -dv --verbose=2 "$APP_BUNDLE" 2>&1 | grep -E "(Authority=|Signature=|Identifier=)" || true
 
 echo "=========================================="
 echo "✅ Successfully built: $APP_BUNDLE"

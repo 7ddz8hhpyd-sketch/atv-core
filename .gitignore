@@ -74,3 +74,8 @@ Thumbs.db
 *.key
 *.cer
 *.crt
+
+# Local settings / overrides
+.atv-settings.json
+atv-settings.json
+

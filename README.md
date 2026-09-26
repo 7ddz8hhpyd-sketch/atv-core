@@ -94,7 +94,7 @@ Options:
 - `--ui-port <PORT>`: Custom port for the Web Inspector (default: `8765`).
 - `--no-ui`: Disable the Web Inspector server.
 - `--mouse`: Initial start in trackpad mouse mode (can be toggled at runtime with `m` or from remote/web).
-- `--speed <0.2-3.0>`: Initial mouse speed / sensitivity multiplier (default: `1.0`).
+- `--speed <0.2-3.0>`: Initial mouse speed / sensitivity multiplier (default: `0.5`, persisted in `~/.config/atv/settings.json`).
 - `--verbose-events`: Enable verbose terminal logging for buttons and events (default: quiet debug).
 - `--name "<Name>"`: Custom device name (defaults to current Mac's ComputerName on macOS).
 - `--device-id <MAC>`: Custom device MAC identifier (defaults to auto-detected hardware MAC).

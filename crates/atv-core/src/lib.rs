@@ -18,6 +18,7 @@ pub mod inspector;
 pub mod opack;
 pub mod server;
 pub mod session;
+pub mod settings;
 pub mod srp;
 pub mod tlv;
 
@@ -26,6 +27,7 @@ pub use error::{Error, Result};
 pub use identity::DeviceIdentity;
 pub use inspector::InspectorHub;
 pub use server::{AtvConfig, AtvServer};
+pub use settings::{UserSettings, DEFAULT_MOUSE_SPEED};
 
 /// Companion frame types (first byte of the 4-byte frame header).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

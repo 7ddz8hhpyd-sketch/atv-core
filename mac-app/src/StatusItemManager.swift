@@ -184,7 +184,7 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
         let isOnline = isServiceRunning
         let isConnected = currentStatus?.client_connected ?? false
         let isMouse = currentStatus?.mouse_mode ?? true
-        let speed = currentStatus?.mouse_speed ?? 1.0
+        let speed = currentStatus?.mouse_speed ?? 0.5
         let accel = currentStatus?.mouse_accel ?? true
         let verbose = currentStatus?.verbose_events ?? false
 
@@ -259,8 +259,8 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
         // 5. Sensitivity Speed Submenu
         let speedMenu = NSMenu()
         let presets: [(String, Double)] = [
-            ("🐢 0.5x 慢速微调", 0.5),
-            ("🎯 1.0x 标准默认", 1.0),
+            ("🐢 0.5x 慢速精准 (默认)", 0.5),
+            ("🎯 1.0x 标准手感", 1.0),
             ("⚡ 1.5x 快速顺畅", 1.5),
             ("🚀 2.0x 极速大屏", 2.0)
         ]

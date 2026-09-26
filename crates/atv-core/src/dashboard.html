@@ -497,7 +497,7 @@
         </div>
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span id="cardModeBadge" class="mode-badge">🖱️ 鼠标光标</span>
-          <span id="speedDisplay" class="driver-badge">1.00x 标准</span>
+          <span id="speedDisplay" class="driver-badge">0.50x 慢速</span>
           <button id="btnVerboseToggle" class="accel-btn" onclick="toggleVerbose()">
             <span id="verboseDot" class="accel-dot"></span>
             <span id="verboseText">🔇 事件日志: 静默 (Debug)</span>
@@ -527,14 +527,14 @@
         <div class="driver-body">
           <div class="slider-row">
             <span class="slider-label">🐢 慢速精细 (0.2x)</span>
-            <input type="range" id="speedSlider" min="0.2" max="3.0" step="0.05" value="1.0" oninput="onSliderInput(this.value)" onchange="onSliderChange(this.value)">
+            <input type="range" id="speedSlider" min="0.2" max="3.0" step="0.05" value="0.5" oninput="onSliderInput(this.value)" onchange="onSliderChange(this.value)">
             <span class="slider-label">🚀 极速大屏 (3.0x)</span>
           </div>
 
           <div class="preset-group">
             <span class="preset-label">快速预设:</span>
-            <button class="p-btn" data-speed="0.5" onclick="setSpeedPreset(0.5)">🐢 0.5x 慢速精准</button>
-            <button class="p-btn active" data-speed="1.0" onclick="setSpeedPreset(1.0)">🎯 1.0x 标准默认</button>
+            <button class="p-btn active" data-speed="0.5" onclick="setSpeedPreset(0.5)">🐢 0.5x 慢速精准 (默认)</button>
+            <button class="p-btn" data-speed="1.0" onclick="setSpeedPreset(1.0)">🎯 1.0x 标准舒适</button>
             <button class="p-btn" data-speed="1.5" onclick="setSpeedPreset(1.5)">⚡ 1.5x 快速顺畅</button>
             <button class="p-btn" data-speed="2.2" onclick="setSpeedPreset(2.2)">🚀 2.2x 极速大屏</button>
           </div>
@@ -559,7 +559,7 @@
             </div>
             <div class="tp-item">
               <span class="tp-label">指针灵敏度 (速度)</span>
-              <span id="recSpeed" class="tp-value">1.00x (标准舒适)</span>
+              <span id="recSpeed" class="tp-value">0.50x (慢速精准)</span>
             </div>
             <div class="tp-item">
               <span class="tp-label">动力学加速度</span>
@@ -823,7 +823,7 @@
 
     // ===== 触控板独立设置、驱动调速与状态记录管理 =====
     let curMode = true; // 默认鼠标模式
-    let curSpeed = 1.0;
+    let curSpeed = 0.5;
     let curAccel = true;
     let curVerbose = false;
     let screenBounds = null;

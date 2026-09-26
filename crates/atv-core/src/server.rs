@@ -59,7 +59,7 @@ pub struct AtvConfig {
     pub mouse_mode: bool,
     /// Port for Debug Web UI & Inspector (None to disable, default Some(8765)).
     pub ui_port: Option<u16>,
-    /// Initial mouse speed multiplier (default 1.0).
+    /// Initial mouse speed multiplier (default 0.5).
     pub mouse_speed: f64,
     /// Hardware / MAC-like identifier (e.g. "84:2F:57:2E:6C:EE").
     pub device_id: Option<String>,
@@ -72,13 +72,14 @@ pub struct AtvConfig {
 impl Default for AtvConfig {
     fn default() -> Self {
         let identity = DeviceIdentity::detect();
+        let settings = crate::settings::UserSettings::load();
         Self {
             name: identity.name,
             pin: 1111,
             ip: None,
-            mouse_mode: false,
+            mouse_mode: settings.mouse_mode.unwrap_or(false),
             ui_port: Some(8765),
-            mouse_speed: 1.0,
+            mouse_speed: settings.mouse_speed,
             device_id: Some(identity.device_id),
             server_identifier: Some(identity.server_identifier),
             private_key: Some(identity.private_key),
@@ -729,6 +730,7 @@ async fn handle_ui_client(
                 mouse_mode.store(new_mode, Ordering::SeqCst);
                 delegate.on_mode_changed(new_mode);
                 inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                crate::settings::UserSettings::update_mouse_mode(new_mode);
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
                     new_mode
@@ -744,6 +746,7 @@ async fn handle_ui_client(
             mouse_mode.store(new_mode, Ordering::SeqCst);
             delegate.on_mode_changed(new_mode);
             inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+            crate::settings::UserSettings::update_mouse_mode(new_mode);
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
                 new_mode
@@ -763,15 +766,23 @@ async fn handle_ui_client(
                     .or_else(|| extract_bool_from_json(body, "verbose"))
                     .unwrap_or(cur_verbose);
 
+                let mut new_mode_opt = None;
                 if let Some(new_mode) = extract_bool_from_json(body, "mouse_mode")
                     .or_else(|| extract_bool_from_json(body, "mode"))
                 {
                     mouse_mode.store(new_mode, Ordering::SeqCst);
                     delegate.on_mode_changed(new_mode);
                     inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                    new_mode_opt = Some(new_mode);
                 }
 
                 delegate.on_touchpad_settings_changed(new_speed, new_accel, new_verbose);
+                crate::settings::UserSettings::update_all(
+                    new_speed,
+                    new_accel,
+                    new_verbose,
+                    new_mode_opt.or_else(|| Some(mouse_mode.load(Ordering::SeqCst))),
+                );
                 inspector.emit(
                     "touchpad_settings",
                     &format!(
