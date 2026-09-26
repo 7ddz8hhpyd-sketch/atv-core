@@ -1,0 +1,89 @@
+name: Build and Release Apple TV Remote
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a draft GitHub release with the DMG'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-macos:
+    name: Build macOS App & DMG (Apple Silicon)
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run Rust Tests
+        run: |
+          cargo test --workspace
+
+      - name: Import Code Signing Certificate
+        env:
+          CERT_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
+        run: |
+          if [ -n "$CERT_BASE64" ]; then
+            echo "🔐 Found certificate secret, importing to runner keychain..."
+            echo "$CERT_BASE64" | base64 --decode > /tmp/runner_cert.p12
+            chmod +x ./scripts/import_certificate.sh
+            ./scripts/import_certificate.sh /tmp/runner_cert.p12 "$CERT_PASSWORD"
+            rm -f /tmp/runner_cert.p12
+          else
+            echo "⚠️ No signing certificate secret found, falling back to ad-hoc signing."
+          fi
+
+      - name: Build AppleTVRemote.app and AppleTVRemote.dmg
+        run: |
+          chmod +x ./scripts/*.sh
+          ./scripts/build_app.sh
+          ./scripts/build_dmg.sh
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppleTVRemote-macOS
+          path: |
+            build/AppleTVRemote.dmg
+            build/AppleTVRemote.app
+          retention-days: 14
+
+      - name: Publish GitHub Release (on tag or manual release)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/AppleTVRemote.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

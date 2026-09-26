@@ -29,8 +29,6 @@ cat <<EOF > "$PLIST_PATH"
         <string>$INSTALL_DIR/atv-cli</string>
         <string>--target</string>
         <string>mac</string>
-        <string>--name</string>
-        <string>Mac mini</string>
         <string>--pin</string>
         <string>1111</string>
     </array>

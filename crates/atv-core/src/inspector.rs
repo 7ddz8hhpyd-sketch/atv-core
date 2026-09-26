@@ -4,7 +4,7 @@
 //! and broadcasts them over Server-Sent Events (SSE) to connected web browsers.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
@@ -14,6 +14,9 @@ pub struct InspectorHub {
     sequence: AtomicU64,
     history: Mutex<VecDeque<String>>,
     tx: broadcast::Sender<String>,
+    client_connected: AtomicBool,
+    client_peer: Mutex<Option<String>>,
+    session_ready: AtomicBool,
 }
 
 impl InspectorHub {
@@ -23,11 +26,46 @@ impl InspectorHub {
             sequence: AtomicU64::new(0),
             history: Mutex::new(VecDeque::with_capacity(HISTORY_MAX_LEN)),
             tx,
+            client_connected: AtomicBool::new(false),
+            client_peer: Mutex::new(None),
+            session_ready: AtomicBool::new(false),
         })
+    }
+
+    pub fn set_client_connected(&self, peer: Option<&str>) {
+        match peer {
+            Some(p) => {
+                self.client_connected.store(true, Ordering::SeqCst);
+                if let Ok(mut g) = self.client_peer.lock() {
+                    *g = Some(p.to_string());
+                }
+            }
+            None => {
+                self.client_connected.store(false, Ordering::SeqCst);
+                if let Ok(mut g) = self.client_peer.lock() {
+                    *g = None;
+                }
+                self.session_ready.store(false, Ordering::SeqCst);
+            }
+        }
+    }
+
+    pub fn set_session_ready(&self, ready: bool) {
+        self.session_ready.store(ready, Ordering::SeqCst);
+    }
+
+    pub fn get_client_info(&self) -> (bool, Option<String>, bool) {
+        let connected = self.client_connected.load(Ordering::SeqCst);
+        let peer = self.client_peer.lock().ok().and_then(|g| g.clone());
+        let ready = self.session_ready.load(Ordering::SeqCst);
+        (connected, peer, ready)
     }
 
     /// Emit an event with JSON payload to all connected debug clients.
     pub fn emit(&self, event: &str, data_json: &str) {
+        if self.tx.receiver_count() == 0 {
+            return;
+        }
         let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         let now = chrono_timestamp();
         let packet = format!(

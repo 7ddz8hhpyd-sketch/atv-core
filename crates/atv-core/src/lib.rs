@@ -13,6 +13,7 @@
 pub mod crypto;
 pub mod delegate;
 pub mod error;
+pub mod identity;
 pub mod inspector;
 pub mod opack;
 pub mod server;
@@ -22,6 +23,7 @@ pub mod tlv;
 
 pub use delegate::{AtvDelegate, EventKind, TouchPhase};
 pub use error::{Error, Result};
+pub use identity::DeviceIdentity;
 pub use inspector::InspectorHub;
 pub use server::{AtvConfig, AtvServer};
 

@@ -15,6 +15,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use crate::crypto::{hkdf_expand, CompanionCipher};
 use crate::delegate::{AtvDelegate, EventKind, TouchPhase};
 use crate::error::{Error, Result};
+use crate::identity::DeviceIdentity;
 use crate::inspector::InspectorHub;
 use crate::opack::{self, Value};
 use crate::srp::SrpServer;
@@ -69,9 +70,11 @@ pub struct CompanionSession {
     writer: SharedWriter,
     delegate: Arc<dyn AtvDelegate>,
     device_name: String,
+    device_mac: [u8; 6],
     pin: u32,
-    mouse_mode: bool,
+    mouse_mode: Arc<AtomicBool>,
     unique_id: Vec<u8>,
+    private_key: [u8; 32],
     signing_key: SigningKey,
     auth_pub: [u8; 32],
     verify_private: StaticSecret,
@@ -95,37 +98,40 @@ impl CompanionSession {
     pub fn new(
         writer: SharedWriter,
         delegate: Arc<dyn AtvDelegate>,
-        device_name: String,
+        identity: &DeviceIdentity,
         pin: u32,
-        mouse_mode: bool,
+        mouse_mode: Arc<AtomicBool>,
         inspector: Arc<InspectorHub>,
     ) -> Self {
-        let signing_key = SigningKey::from_bytes(&SERVER_PRIVATE_KEY);
+        let signing_key = SigningKey::from_bytes(&identity.private_key);
         let auth_pub = signing_key.verifying_key().to_bytes();
-        let verify_private = StaticSecret::from(SERVER_PRIVATE_KEY);
+        let verify_private = StaticSecret::from(identity.private_key);
         let verify_pub = X25519PublicKey::from(&verify_private);
         let remote_session_id: u32 = rand::random();
+        let (initial_volume, initial_muted) = delegate.get_audio_state().unwrap_or((0.5, false));
         Self {
             writer,
             delegate,
-            device_name,
+            device_name: identity.name.clone(),
+            device_mac: identity.mac_bytes,
             pin,
             mouse_mode,
-            unique_id: SERVER_IDENTIFIER.as_bytes().to_vec(),
+            unique_id: identity.server_identifier.as_bytes().to_vec(),
+            private_key: identity.private_key,
             signing_key,
             auth_pub,
             verify_private,
             verify_pub,
             cipher: None,
             current_identifier: None,
-            srp: SrpServer::new(pin, &SERVER_PRIVATE_KEY),
+            srp: SrpServer::new(pin, &identity.private_key),
             remote_session_id,
             session_established: Arc::new(AtomicBool::new(false)),
             touch_origin: None,
             touch_last: None,
             touch_moved: false,
-            volume: 0.5,
-            muted: false,
+            volume: initial_volume,
+            muted: initial_muted,
             system_status: 3, // Awake
             display_power_on: true,
             inspector,
@@ -414,10 +420,10 @@ impl CompanionSession {
             Value::kv("model", Value::str(DEVICE_MODEL)),
             Value::kv(
                 "wifiMAC",
-                Value::Bytes(vec![0x40, 0xff, 0xa1, 0x8f, 0xa1, 0xb9]),
+                Value::Bytes(self.device_mac.to_vec()),
             ),
             Value::kv("name", Value::str(&self.device_name)),
-            Value::kv("mac", Value::Bytes(vec![0x40, 0xc4, 0xff, 0x8f, 0xb1, 0x99])),
+            Value::kv("mac", Value::Bytes(self.device_mac.to_vec())),
         ]);
         let tlv_data = tlv::write(&[
             (tags::IDENTIFIER, &self.unique_id),
@@ -442,7 +448,7 @@ impl CompanionSession {
         self.delegate.on_event(EventKind::Paired, "");
         self.inspector.emit("paired", "{}");
         // Fresh salt/verifier for the next pairing attempt.
-        self.srp = SrpServer::new(self.pin, &SERVER_PRIVATE_KEY);
+        self.srp = SrpServer::new(self.pin, &self.private_key);
         Ok(())
     }
 
@@ -544,6 +550,7 @@ impl CompanionSession {
         match identifier.as_deref() {
             Some("_sessionStart") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                self.inspector.set_session_ready(true);
                 let local_sid = content
                     .get("_sid")
                     .or_else(|| content.get("sid"))
@@ -567,6 +574,7 @@ impl CompanionSession {
                 );
             }
             Some("TVRCSessionStart") => {
+                self.inspector.set_session_ready(true);
                 let version = content
                     .get("ProtocolVersionKey")
                     .and_then(Value::as_str)
@@ -589,6 +597,7 @@ impl CompanionSession {
                 self.inspector.emit("remote_ready", &format!("{{\"version\":\"{version}\"}}"));
             }
             Some("_sessionStop") => {
+                self.inspector.set_session_ready(false);
                 self.send_response(xid, None, 0).await?;
                 self.delegate
                     .on_event(EventKind::SessionStopped, &content.to_string());
@@ -745,15 +754,20 @@ impl CompanionSession {
         if state == 2 {
             match command_name.as_str() {
                 "volume_up" | "volume_down" => {
-                    let step = 1.0 / 16.0;
-                    if command_name == "volume_up" {
-                        self.volume = (self.volume + step).min(1.0);
+                    self.delegate.on_button(&command_name);
+                    if let Some((vol, muted)) = self.delegate.get_audio_state() {
+                        self.volume = vol;
+                        self.muted = muted;
                     } else {
-                        self.volume = (self.volume - step).max(0.0);
+                        let step = 1.0 / 16.0;
+                        if command_name == "volume_up" {
+                            self.volume = (self.volume + step).min(1.0);
+                        } else {
+                            self.volume = (self.volume - step).max(0.0);
+                        }
+                        self.muted = false;
+                        self.delegate.on_audio(self.volume, self.muted);
                     }
-                    // Pressing a volume key on a muted TV lifts the mute.
-                    self.muted = false;
-                    self.delegate.on_audio(self.volume, self.muted);
                     self.inspector.emit(
                         "audio_state",
                         &format!("{{\"volume\":{:.3},\"muted\":{}}}", self.volume, self.muted),
@@ -761,8 +775,14 @@ impl CompanionSession {
                     self.push_media_state(xid).await?;
                 }
                 "mute" => {
-                    self.muted = !self.muted;
-                    self.delegate.on_audio(self.volume, self.muted);
+                    self.delegate.on_button(&command_name);
+                    if let Some((vol, muted)) = self.delegate.get_audio_state() {
+                        self.volume = vol;
+                        self.muted = muted;
+                    } else {
+                        self.muted = !self.muted;
+                        self.delegate.on_audio(self.volume, self.muted);
+                    }
                     self.inspector.emit(
                         "audio_state",
                         &format!("{{\"volume\":{:.3},\"muted\":{}}}", self.volume, self.muted),
@@ -796,10 +816,12 @@ impl CompanionSession {
                         "power_state",
                         &format!("{{\"display_on\":{}}}", self.display_power_on),
                     );
+                    self.delegate.on_button(&command_name);
                 }
-                _ => {}
+                _ => {
+                    self.delegate.on_button(&command_name);
+                }
             }
-            self.delegate.on_button(&command_name);
             self.inspector.emit(
                 "button",
                 &format!("{{\"name\":\"{command_name}\"}}"),
@@ -818,6 +840,10 @@ impl CompanionSession {
             // GetVolume: report 0 while muted so the phone's volume HUD shows
             // an empty bar — the only visual mute feedback this protocol has.
             Some(5) => {
+                if let Some((vol, muted)) = self.delegate.get_audio_state() {
+                    self.volume = vol;
+                    self.muted = muted;
+                }
                 response = Value::dict(vec![Value::kv(
                     "_vol",
                     Value::Double(if self.muted { 0.0 } else { self.volume }),
@@ -871,9 +897,10 @@ impl CompanionSession {
         };
         let position = (x, y);
 
+        let is_mouse = self.mouse_mode.load(Ordering::SeqCst);
         if phase != 4 {
             // intermediate move
-            if self.mouse_mode {
+            if is_mouse {
                 if let Some(last) = self.touch_last {
                     let dx = position.0 - last.0;
                     let dy = position.1 - last.1;
@@ -910,13 +937,20 @@ impl CompanionSession {
             &format!("{{\"phase\":4,\"dx\":{:.1},\"dy\":{:.1}}}", dx, dy),
         );
 
-        if self.mouse_mode {
+        if is_mouse {
             if distance < TAP_MAX_DISTANCE {
                 self.delegate.on_event(EventKind::MouseClick, "");
                 self.inspector.emit("button", "{\"name\":\"click\"}");
             }
             return;
         }
+
+        if distance < TAP_MAX_DISTANCE {
+            self.delegate.on_button("select");
+            self.inspector.emit("button", "{\"name\":\"select\"}");
+            return;
+        }
+
         if distance < SWIPE_MIN_DISTANCE {
             return;
         }

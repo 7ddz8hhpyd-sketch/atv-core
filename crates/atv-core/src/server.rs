@@ -6,6 +6,7 @@
 //! answering HTTP "OK".
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(not(target_os = "macos"))]
@@ -16,16 +17,34 @@ use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
+use sha2::{Digest, Sha256};
+
 use crate::delegate::{AtvDelegate, EventKind};
 use crate::error::{Error, Result};
+use crate::identity::{self, DeviceIdentity};
 use crate::inspector::InspectorHub;
-use crate::session::{CompanionSession, DEVICE_MODEL, SERVER_IDENTIFIER};
+use crate::session::{CompanionSession, DEVICE_MODEL};
 use crate::FrameType;
 
 pub const MRP_PORT: u16 = 49152;
 pub const COMPANION_PORT: u16 = 49153;
 pub const SOURCE_VERSION: &str = "715.2";
 pub const DEFAULT_DEVICE_NAME: &str = "Mac Remote";
+
+/// Query the local Mac's computer name via `scutil --get ComputerName`.
+pub fn detect_mac_computer_name() -> Option<String> {
+    let name = identity::detect_computer_name();
+    if name == DEFAULT_DEVICE_NAME {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Default device name: uses local Mac computer name on macOS, otherwise "Mac Remote".
+pub fn default_device_name() -> String {
+    identity::detect_computer_name()
+}
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -40,22 +59,29 @@ pub struct AtvConfig {
     pub mouse_mode: bool,
     /// Port for Debug Web UI & Inspector (None to disable, default Some(8765)).
     pub ui_port: Option<u16>,
-    /// Hardware / MAC-like identifier (e.g. "AA:BB:CC:DD:EE:01").
+    /// Initial mouse speed multiplier (default 1.0).
+    pub mouse_speed: f64,
+    /// Hardware / MAC-like identifier (e.g. "84:2F:57:2E:6C:EE").
     pub device_id: Option<String>,
-    /// Unique UUID (e.g. "2E468249-2F22-4416-86C8-50BF22D4F24D").
+    /// Unique UUID (e.g. "F232C260-003A-5396-99D1-F8164BB03DF2").
     pub server_identifier: Option<String>,
+    /// Persistent private key seed (32 bytes).
+    pub private_key: Option<[u8; 32]>,
 }
 
 impl Default for AtvConfig {
     fn default() -> Self {
+        let identity = DeviceIdentity::detect();
         Self {
-            name: DEFAULT_DEVICE_NAME.to_string(),
+            name: identity.name,
             pin: 1111,
             ip: None,
             mouse_mode: false,
             ui_port: Some(8765),
-            device_id: None,
-            server_identifier: None,
+            mouse_speed: 1.0,
+            device_id: Some(identity.device_id),
+            server_identifier: Some(identity.server_identifier),
+            private_key: Some(identity.private_key),
         }
     }
 }
@@ -63,10 +89,13 @@ impl Default for AtvConfig {
 /// A running Apple TV simulator. Drop or call `stop()` to shut down.
 pub struct AtvServer {
     config: AtvConfig,
+    identity: DeviceIdentity,
     ip: Ipv4Addr,
     airplay_port: u16,
     ui_port: Option<u16>,
     inspector: Arc<InspectorHub>,
+    mouse_mode: Arc<AtomicBool>,
+    delegate: Arc<dyn AtvDelegate>,
     shutdown_tx: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
     #[cfg(target_os = "macos")]
@@ -80,9 +109,26 @@ pub struct AtvServer {
 impl AtvServer {
     /// Start listeners and advertise the three Bonjour services.
     pub async fn start(config: AtvConfig, delegate: Arc<dyn AtvDelegate>) -> Result<Self> {
+        let mouse_mode = Arc::new(AtomicBool::new(config.mouse_mode));
+        Self::start_with_mouse_mode(config, delegate, mouse_mode).await
+    }
+
+    /// Start listeners with a shared atomic mouse_mode boolean for live mode switching.
+    pub async fn start_with_mouse_mode(
+        config: AtvConfig,
+        delegate: Arc<dyn AtvDelegate>,
+        mouse_mode: Arc<AtomicBool>,
+    ) -> Result<Self> {
         if config.pin > 9999 {
             return Err(Error::Protocol("pin must be between 0000 and 9999".into()));
         }
+        let identity = DeviceIdentity::from_config(&config);
+        let mut config = config;
+        config.name = identity.name.clone();
+        config.device_id = Some(identity.device_id.clone());
+        config.server_identifier = Some(identity.server_identifier.clone());
+        config.private_key = Some(identity.private_key);
+
         let ip = match config.ip {
             Some(ip) => ip,
             None => detect_local_ip()?,
@@ -107,9 +153,11 @@ impl AtvServer {
         )));
         tasks.push(tokio::spawn(companion_loop(
             companion_listener,
-            config.clone(),
+            identity.clone(),
+            config.pin,
             delegate.clone(),
             inspector.clone(),
+            mouse_mode.clone(),
             shutdown_rx.clone(),
         )));
 
@@ -122,6 +170,8 @@ impl AtvServer {
                         ui_listener,
                         inspector.clone(),
                         delegate.clone(),
+                        mouse_mode.clone(),
+                        identity.name.clone(),
                         shutdown_rx.clone(),
                     )));
                 }
@@ -131,26 +181,47 @@ impl AtvServer {
             }
         }
 
-        let server_id = config
-            .server_identifier
-            .as_deref()
-            .unwrap_or(SERVER_IDENTIFIER);
-        let unique_id = server_id.replace('-', "");
-        let device_id = config
-            .device_id
-            .as_deref()
-            .unwrap_or("AA:BB:CC:DD:EE:01");
-        let rpha = device_id.replace(':', "");
+        let rpha = identity.device_id.replace(':', "").to_uppercase();
+        let airplay_id = {
+            let mut h = Sha256::new();
+            h.update(b"airplay-identity:");
+            h.update(identity.server_identifier.as_bytes());
+            hex::encode(&h.finalize()[..8]).to_uppercase()
+        };
+        let rphn = {
+            let mut h = Sha256::new();
+            h.update(b"rpHN:");
+            h.update(identity.server_identifier.as_bytes());
+            hex::encode(&h.finalize()[..6]).to_uppercase()
+        };
+        let rpad = {
+            let mut h = Sha256::new();
+            h.update(b"rpAD:");
+            h.update(identity.server_identifier.as_bytes());
+            hex::encode(&h.finalize()[..6]).to_uppercase()
+        };
+        let rphi = {
+            let mut h = Sha256::new();
+            h.update(b"rpHI:");
+            h.update(identity.server_identifier.as_bytes());
+            hex::encode(&h.finalize()[..6]).to_uppercase()
+        };
+        let pk = {
+            let mut h = Sha256::new();
+            h.update(b"pk:");
+            h.update(identity.server_identifier.as_bytes());
+            hex::encode(&h.finalize()[..16])
+        };
 
         let services: Vec<(&str, u16, Vec<(&str, &str)>)> = vec![
             (
                 "_mediaremotetv._tcp.local.",
                 MRP_PORT,
                 vec![
-                    ("Name", config.name.as_str()),
-                    ("UniqueIdentifier", unique_id.as_str()),
+                    ("Name", identity.name.as_str()),
+                    ("UniqueIdentifier", identity.unique_id.as_str()),
                     ("SystemBuildVersion", "22K160"),
-                    ("LocalAirPlayReceiverPairingIdentity", "9C4F2B8A1D3E5F60"),
+                    ("LocalAirPlayReceiverPairingIdentity", airplay_id.as_str()),
                     ("ModelName", "Apple TV"),
                     ("AllowPairing", "YES"),
                 ],
@@ -161,28 +232,28 @@ impl AtvServer {
                 vec![
                     ("rpMac", "1"),
                     ("rpHA", rpha.as_str()),
-                    ("rpHN", "B7359A9BCBAB"),
+                    ("rpHN", rphn.as_str()),
                     ("rpVr", SOURCE_VERSION),
                     ("rpMd", DEVICE_MODEL),
                     ("rpFl", "0x36782"),
-                    ("rpAD", "F0E18C86DB60"),
-                    ("rpHI", "40DB206B32FA"),
-                    ("rpBA", device_id),
+                    ("rpAD", rpad.as_str()),
+                    ("rpHI", rphi.as_str()),
+                    ("rpBA", identity.device_id.as_str()),
                 ],
             ),
             (
                 "_airplay._tcp.local.",
                 airplay_port,
                 vec![
-                    ("deviceid", device_id),
+                    ("deviceid", identity.device_id.as_str()),
                     ("features", "0x5A7FFFF7,0x1E"),
                     ("flags", "0x44"),
                     ("model", DEVICE_MODEL),
                     ("srcvers", SOURCE_VERSION),
                     ("vv", "2"),
-                    ("pi", server_id),
-                    ("pk", "6b8b4567f85b7f54a3e1c0a93f0a9e2c"),
-                    ("name", config.name.as_str()),
+                    ("pi", identity.server_identifier.as_str()),
+                    ("pk", pk.as_str()),
+                    ("name", identity.name.as_str()),
                 ],
             ),
         ];
@@ -197,7 +268,7 @@ impl AtvServer {
                     .trim_end_matches(".local");
                 let mut cmd = tokio::process::Command::new("/usr/bin/dns-sd");
                 cmd.arg("-R")
-                    .arg(&config.name)
+                    .arg(&identity.name)
                     .arg(dns_sd_type)
                     .arg("local.")
                     .arg(port.to_string());
@@ -209,7 +280,7 @@ impl AtvServer {
                 match cmd.spawn() {
                     Ok(child) => {
                         dns_sd_children.push(child);
-                        info!("registered {}.{service_type} on {ip}:{port} (via macOS mDNSResponder)", config.name);
+                        info!("registered {}.{service_type} on {ip}:{port} (via macOS mDNSResponder)", identity.name);
                     }
                     Err(e) => {
                         warn!("failed to spawn /usr/bin/dns-sd for {service_type}: {e}");
@@ -225,11 +296,11 @@ impl AtvServer {
         let mut mdns_fullnames = Vec::new();
         #[cfg(not(target_os = "macos"))]
         {
-            let host_name = format!("{}.local.", config.name.replace(' ', "-"));
+            let host_name = format!("{}.local.", identity.name.replace(' ', "-"));
             for (service_type, port, properties) in services {
                 let info = ServiceInfo::new(
                     service_type,
-                    &config.name,
+                    &identity.name,
                     &host_name,
                     ip.to_string(),
                     port,
@@ -238,11 +309,14 @@ impl AtvServer {
                 .map_err(|e| Error::Mdns(e.to_string()))?;
                 mdns_fullnames.push(info.get_fullname().to_string());
                 mdns.register(info).map_err(|e| Error::Mdns(e.to_string()))?;
-                info!("registered {}.{service_type} on {ip}:{port}", config.name);
+                info!("registered {}.{service_type} on {ip}:{port}", identity.name);
             }
         }
 
         info!("fake Apple TV started");
+        info!("Name      : \"{}\"", identity.name);
+        info!("Device ID : {}", identity.device_id);
+        info!("Server ID : {}", identity.server_identifier);
         info!("PIN       : {:04}", config.pin);
         info!("MRP       : {ip}:{MRP_PORT}");
         info!("Companion : {ip}:{COMPANION_PORT}");
@@ -253,10 +327,13 @@ impl AtvServer {
 
         Ok(Self {
             config,
+            identity,
             ip,
             airplay_port,
             ui_port: actual_ui_port,
             inspector,
+            mouse_mode,
+            delegate,
             shutdown_tx,
             tasks,
             #[cfg(target_os = "macos")]
@@ -270,6 +347,10 @@ impl AtvServer {
 
     pub fn config(&self) -> &AtvConfig {
         &self.config
+    }
+
+    pub fn identity(&self) -> &DeviceIdentity {
+        &self.identity
     }
 
     /// The LAN address the services advertise.
@@ -295,6 +376,30 @@ impl AtvServer {
 
     pub fn inspector(&self) -> Arc<InspectorHub> {
         self.inspector.clone()
+    }
+
+    pub fn mouse_mode_arc(&self) -> Arc<AtomicBool> {
+        self.mouse_mode.clone()
+    }
+
+    pub fn is_mouse_mode(&self) -> bool {
+        self.mouse_mode.load(Ordering::SeqCst)
+    }
+
+    pub fn set_mouse_mode(&self, enabled: bool) {
+        self.mouse_mode.store(enabled, Ordering::SeqCst);
+        self.delegate.on_mode_changed(enabled);
+        self.inspector.emit(
+            "mode_changed",
+            &format!("{{\"mouse_mode\":{}}}", enabled),
+        );
+    }
+
+    pub fn toggle_mouse_mode(&self) -> bool {
+        let current = self.is_mouse_mode();
+        let new_mode = !current;
+        self.set_mouse_mode(new_mode);
+        new_mode
     }
 
     /// Unregister Bonjour services and stop all listeners.
@@ -355,9 +460,11 @@ pub fn detect_local_ip() -> Result<Ipv4Addr> {
 
 async fn companion_loop(
     listener: TcpListener,
-    config: AtvConfig,
+    identity: DeviceIdentity,
+    pin: u32,
     delegate: Arc<dyn AtvDelegate>,
     inspector: Arc<InspectorHub>,
+    mouse_mode: Arc<AtomicBool>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -371,24 +478,28 @@ async fn companion_loop(
             },
             _ = shutdown.changed() => break,
         };
-        let config = config.clone();
+        let identity = identity.clone();
         let delegate = delegate.clone();
         let inspector = inspector.clone();
-        tokio::spawn(handle_companion(stream, config, delegate, inspector));
+        let mouse_mode = mouse_mode.clone();
+        tokio::spawn(handle_companion(stream, identity, pin, delegate, inspector, mouse_mode));
     }
 }
 
 async fn handle_companion(
     stream: TcpStream,
-    config: AtvConfig,
+    identity: DeviceIdentity,
+    pin: u32,
     delegate: Arc<dyn AtvDelegate>,
     inspector: Arc<InspectorHub>,
+    mouse_mode: Arc<AtomicBool>,
 ) {
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "?".into());
     info!("companion client connected: {peer}");
+    inspector.set_client_connected(Some(&peer));
     delegate.on_event(EventKind::ClientConnected, &peer);
     inspector.emit("client_connected", &format!("{{\"peer\":\"{peer}\"}}"));
 
@@ -397,9 +508,9 @@ async fn handle_companion(
     let mut session = CompanionSession::new(
         writer,
         delegate.clone(),
-        config.name.clone(),
-        config.pin,
-        config.mouse_mode,
+        &identity,
+        pin,
+        mouse_mode,
         inspector.clone(),
     );
     let mut disconnect_reason = "peer_closed".to_string();
@@ -426,7 +537,7 @@ async fn handle_companion(
             disconnect_reason = format!("incomplete_frame:{e}");
             break;
         }
-        info!("companion frame={:?} length={length}", frame_type);
+        debug!("companion frame={:?} length={length}", frame_type);
         if let Err(e) = session.handle_frame(frame_type, &payload, &header).await {
             disconnect_reason = format!("error:{e}");
             warn!("companion error: {e}");
@@ -435,6 +546,7 @@ async fn handle_companion(
     }
 
     info!("companion client disconnected: {peer}");
+    inspector.set_client_connected(None);
     delegate.on_event(
         EventKind::ClientDisconnected,
         &format!("{peer} reason={disconnect_reason}"),
@@ -451,6 +563,8 @@ async fn ui_loop(
     listener: TcpListener,
     inspector: Arc<InspectorHub>,
     delegate: Arc<dyn AtvDelegate>,
+    mouse_mode: Arc<AtomicBool>,
+    device_name: String,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -466,7 +580,9 @@ async fn ui_loop(
         };
         let inspector = inspector.clone();
         let delegate = delegate.clone();
-        tokio::spawn(handle_ui_client(stream, inspector, delegate));
+        let mouse_mode = mouse_mode.clone();
+        let device_name = device_name.clone();
+        tokio::spawn(handle_ui_client(stream, inspector, delegate, mouse_mode, device_name));
     }
 }
 
@@ -474,6 +590,8 @@ async fn handle_ui_client(
     mut stream: TcpStream,
     inspector: Arc<InspectorHub>,
     delegate: Arc<dyn AtvDelegate>,
+    mouse_mode: Arc<AtomicBool>,
+    device_name: String,
 ) {
     use tokio::io::AsyncWriteExt;
 
@@ -489,7 +607,8 @@ async fn handle_ui_client(
         return;
     }
     let method = parts[0];
-    let path = parts[1];
+    let raw_path = parts[1];
+    let path = raw_path.split('?').next().unwrap_or(raw_path);
 
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => {
@@ -562,15 +681,123 @@ async fn handle_ui_client(
             if let Some(pos) = req.find("\r\n\r\n") {
                 let body = &req[pos + 4..];
                 if let Some(button) = extract_button_from_json(body) {
+                    if button == "toggle_mode" {
+                        let new_mode = !mouse_mode.load(Ordering::SeqCst);
+                        mouse_mode.store(new_mode, Ordering::SeqCst);
+                        delegate.on_mode_changed(new_mode);
+                        inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
+                            new_mode
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                        return;
+                    }
                     delegate.on_button(&button);
                     inspector.emit("button", &format!("{{\"name\":\"{button}\"}}"));
-                    let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}";
+                    let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
                     let _ = stream.write_all(resp.as_bytes()).await;
                     return;
                 }
             }
             let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes()).await;
+        }
+        ("POST", "/api/mode") => {
+            if let Some(pos) = req.find("\r\n\r\n") {
+                let body = &req[pos + 4..];
+                let new_mode = if body.contains("\"mouse\"") || body.contains("true") {
+                    true
+                } else if body.contains("\"direction\"") || body.contains("false") {
+                    false
+                } else {
+                    !mouse_mode.load(Ordering::SeqCst)
+                };
+                mouse_mode.store(new_mode, Ordering::SeqCst);
+                delegate.on_mode_changed(new_mode);
+                inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
+                    new_mode
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                return;
+            }
+            let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(resp.as_bytes()).await;
+        }
+        ("POST", "/api/toggle_mode") => {
+            let new_mode = !mouse_mode.load(Ordering::SeqCst);
+            mouse_mode.store(new_mode, Ordering::SeqCst);
+            delegate.on_mode_changed(new_mode);
+            inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
+                new_mode
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            return;
+        }
+        ("POST", "/api/touchpad_settings") | ("POST", "/api/mouse_settings") | ("POST", "/api/speed") => {
+            if let Some(pos) = req.find("\r\n\r\n") {
+                let body = &req[pos + 4..];
+                let (cur_speed, cur_accel, cur_verbose) = delegate.get_touchpad_settings();
+                let new_speed = extract_float_from_json(body, "speed")
+                    .unwrap_or(cur_speed)
+                    .clamp(0.1, 10.0);
+                let new_accel = extract_bool_from_json(body, "accel").unwrap_or(cur_accel);
+                let new_verbose = extract_bool_from_json(body, "verbose_events")
+                    .or_else(|| extract_bool_from_json(body, "verbose"))
+                    .unwrap_or(cur_verbose);
+
+                if let Some(new_mode) = extract_bool_from_json(body, "mouse_mode")
+                    .or_else(|| extract_bool_from_json(body, "mode"))
+                {
+                    mouse_mode.store(new_mode, Ordering::SeqCst);
+                    delegate.on_mode_changed(new_mode);
+                    inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                }
+
+                delegate.on_touchpad_settings_changed(new_speed, new_accel, new_verbose);
+                inspector.emit(
+                    "touchpad_settings",
+                    &format!(
+                        "{{\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{new_accel},\"verbose_events\":{new_verbose}}}",
+                        mouse_mode.load(Ordering::SeqCst)
+                    ),
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{},\"speed\":{:.2},\"accel\":{},\"verbose_events\":{}}}",
+                    mouse_mode.load(Ordering::SeqCst), new_speed, new_accel, new_verbose
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                return;
+            }
+            let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(resp.as_bytes()).await;
+        }
+        ("GET", "/api/status") | ("GET", "/api/mode") => {
+            let is_mouse = mouse_mode.load(Ordering::SeqCst);
+            let (speed, accel, verbose_events) = delegate.get_touchpad_settings();
+            let screen_json = match delegate.get_screen_size() {
+                Some((w, h)) => format!("[{},{}]", w.round() as u32, h.round() as u32),
+                None => "null".to_string(),
+            };
+            let (client_conn, client_peer, session_ready) = inspector.get_client_info();
+            let peer_json = match client_peer {
+                Some(p) => format!("\"{p}\""),
+                None => "null".to_string(),
+            };
+            let audio_json = match delegate.get_audio_state() {
+                Some((vol, muted)) => format!("{{\"volume\":{vol:.2},\"muted\":{muted}}}"),
+                None => "null".to_string(),
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"server_online\":true,\"mouse_mode\":{},\"device_name\":\"{}\",\"mouse_speed\":{:.2},\"mouse_accel\":{},\"verbose_events\":{},\"screen_size\":{},\"client_connected\":{},\"client_peer\":{},\"session_ready\":{},\"audio\":{}}}",
+                is_mouse, device_name, speed, accel, verbose_events, screen_json, client_conn, peer_json, session_ready, audio_json
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            return;
         }
         ("GET", "/favicon.ico") => {
             let resp = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
@@ -595,6 +822,34 @@ fn extract_button_from_json(json: &str) -> Option<String> {
     let rest = &rest[1..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+fn extract_float_from_json(json: &str, key: &str) -> Option<f64> {
+    let quoted = format!("\"{key}\"");
+    let idx = json.find(&quoted)?;
+    let rest = &json[idx + quoted.len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    let num_str: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+        .collect();
+    num_str.parse().ok()
+}
+
+fn extract_bool_from_json(json: &str, key: &str) -> Option<bool> {
+    let quoted = format!("\"{key}\"");
+    let idx = json.find(&quoted)?;
+    let rest = &json[idx + quoted.len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 async fn mrp_loop(listener: TcpListener, mut shutdown: watch::Receiver<bool>) {

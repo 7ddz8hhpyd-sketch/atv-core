@@ -65,4 +65,44 @@ pub trait AtvDelegate: Send + Sync + 'static {
 
     /// Lifecycle/state event with a human-readable detail string.
     fn on_event(&self, _kind: EventKind, _detail: &str) {}
+
+    /// Called when the input mode (directional vs mouse) changes.
+    fn on_mode_changed(&self, _mouse_mode: bool) {}
+
+    /// Set touchpad settings: speed factor, acceleration toggle, and verbose event logging toggle.
+    fn on_touchpad_settings_changed(
+        &self,
+        _speed: f64,
+        _acceleration: bool,
+        _verbose_events: bool,
+    ) {
+    }
+
+    /// Query the current touchpad settings: (speed_factor, acceleration_enabled, verbose_events_enabled).
+    fn get_touchpad_settings(&self) -> (f64, bool, bool) {
+        (1.0, true, false)
+    }
+
+    /// Set mouse pointer speed factor and acceleration toggle (legacy helper).
+    fn on_mouse_settings_changed(&self, speed: f64, acceleration: bool) {
+        let (_, _, verbose) = self.get_touchpad_settings();
+        self.on_touchpad_settings_changed(speed, acceleration, verbose);
+    }
+
+    /// Query the current mouse settings: (speed_factor, acceleration_enabled).
+    fn get_mouse_settings(&self) -> (f64, bool) {
+        let (s, a, _) = self.get_touchpad_settings();
+        (s, a)
+    }
+
+    /// Query current screen bounds: (width, height) in pixels.
+    fn get_screen_size(&self) -> Option<(f64, f64)> {
+        None
+    }
+
+    /// Query the current system audio state: volume in [0.0, 1.0] and muted flag.
+    /// Returns None if system volume querying is unsupported or unavailable.
+    fn get_audio_state(&self) -> Option<(f64, bool)> {
+        None
+    }
 }

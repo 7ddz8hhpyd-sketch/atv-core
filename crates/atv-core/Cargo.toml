@@ -17,8 +17,6 @@ num-bigint = { version = "0.4", features = ["rand"] }
 num-traits = "0.2"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
 thiserror = "2"
 tracing = "0.1"
-
-[dev-dependencies]
-hex = "0.4"

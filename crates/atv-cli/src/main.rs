@@ -28,10 +28,15 @@ fn usage() -> ! {
            --target <mac|android|print>   Target device to control (default: mac on macOS, else print)\n\
            --android-host <IP>            Android TV IP address (required when --target android)\n\
            --android-port <PORT>          Android TV ADB port (default: 5555)\n\
-           --name <NAME>                  Device name shown in iOS Remote (default: \"Mac Remote\")\n\
+           --name <NAME>                  Device name shown in iOS Remote (default: Computer Name on macOS, else \"Mac Remote\")\n\
+           --device-id <MAC>              Hardware / MAC device ID (default: auto-detected hardware MAC)\n\
+           --server-id <UUID>             Unique Server UUID (default: auto-detected hardware UUID)\n\
            --pin <PIN>                    4-digit pairing PIN (default: 1111)\n\
            --ip <IPV4>                    Local IPv4 to advertise (auto-detected if omitted)\n\
-           --mouse                        Trackpad mouse mode (touch moves cursor, tap clicks)\n\
+           --mouse                        Initial mode: Trackpad mouse (default on macOS)\n\
+           --direction, --dpad            Initial mode: Direction keys (D-pad) (default on other targets)\n\
+           --speed <FLOAT>                Initial mouse speed multiplier (default: 1.0)\n\
+           --verbose-events               Enable verbose terminal logging for buttons and events (default: quiet debug)\n\
            --ui-port <PORT>               Debug Web UI port (default: 8765)\n\
            --no-ui                        Disable Debug Web UI\n\
            --open                         Automatically open Debug UI in default browser\n\
@@ -46,6 +51,8 @@ struct CliArgs {
     android_host: Option<String>,
     android_port: u16,
     open_browser: bool,
+    verbose_events: bool,
+    prompt_accessibility: bool,
 }
 
 fn parse_args() -> CliArgs {
@@ -58,6 +65,9 @@ fn parse_args() -> CliArgs {
     let mut android_host = None;
     let mut android_port = 5555;
     let mut open_browser = false;
+    let mut verbose_events = false;
+    let mut mouse_mode_explicit = false;
+    let mut prompt_accessibility = true;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -81,6 +91,8 @@ fn parse_args() -> CliArgs {
                     .unwrap_or_else(|| usage());
             }
             "--name" => config.name = args.next().unwrap_or_else(|| usage()),
+            "--device-id" => config.device_id = Some(args.next().unwrap_or_else(|| usage())),
+            "--server-id" => config.server_identifier = Some(args.next().unwrap_or_else(|| usage())),
             "--pin" => {
                 let pin: u32 = args
                     .next()
@@ -98,7 +110,23 @@ fn parse_args() -> CliArgs {
                         .unwrap_or_else(|| usage()),
                 );
             }
-            "--mouse" => config.mouse_mode = true,
+            "--mouse" => {
+                config.mouse_mode = true;
+                mouse_mode_explicit = true;
+            }
+            "--direction" | "--dpad" => {
+                config.mouse_mode = false;
+                mouse_mode_explicit = true;
+            }
+            "--speed" => {
+                let sp: f64 = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(|| usage());
+                config.mouse_speed = sp;
+            }
+            "--verbose-events" | "--verbose" => verbose_events = true,
+            "--no-prompt" => prompt_accessibility = false,
             "--ui-port" => {
                 let port: u16 = args
                     .next()
@@ -113,6 +141,13 @@ fn parse_args() -> CliArgs {
         }
     }
 
+    if !mouse_mode_explicit {
+        #[cfg(target_os = "macos")]
+        if target == Target::Mac {
+            config.mouse_mode = true;
+        }
+    }
+
     if target == Target::Android && android_host.is_none() {
         eprintln!("Error: --target android requires --android-host <IP>");
         usage();
@@ -124,6 +159,8 @@ fn parse_args() -> CliArgs {
         android_host,
         android_port,
         open_browser,
+        verbose_events,
+        prompt_accessibility,
     }
 }
 
@@ -137,15 +174,20 @@ async fn main() {
         .init();
 
     let args = parse_args();
-    let mouse_mode = args.config.mouse_mode;
+    let mouse_mode = Arc::new(std::sync::atomic::AtomicBool::new(args.config.mouse_mode));
     let open_browser = args.open_browser;
 
     let delegate: Arc<dyn AtvDelegate> = match args.target {
         Target::Mac => {
             #[cfg(target_os = "macos")]
             {
-                println!("Target    : macOS (Mac mini control via CoreGraphics)");
-                Arc::new(macos::MacDelegate::new(mouse_mode))
+                Arc::new(macos::MacDelegate::new_with_full_settings(
+                    mouse_mode.clone(),
+                    args.config.mouse_speed,
+                    true,
+                    args.verbose_events,
+                    args.prompt_accessibility,
+                ))
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -155,20 +197,20 @@ async fn main() {
         }
         Target::Android => {
             let host = args.android_host.expect("checked above");
-            println!("Target    : Android TV at {host}:{}", args.android_port);
+            println!("Target      : Android TV at {host}:{}", args.android_port);
             Arc::new(android_adb::AndroidAdbDelegate::new(
                 host,
                 args.android_port,
-                mouse_mode,
+                mouse_mode.load(std::sync::atomic::Ordering::SeqCst),
             ))
         }
         Target::Print => {
-            println!("Target    : observe-only (printing events to stdout)");
+            println!("Target      : observe-only (printing events to stdout)");
             Arc::new(print::PrintDelegate)
         }
     };
 
-    let server = match AtvServer::start(args.config, delegate).await {
+    let server = match AtvServer::start_with_mouse_mode(args.config, delegate.clone(), mouse_mode.clone()).await {
         Ok(server) => server,
         Err(e) => {
             eprintln!("failed to start server: {e}");
@@ -176,9 +218,89 @@ async fn main() {
         }
     };
 
+    let identity = server.identity();
+    println!("Device Name : \"{}\"", identity.name);
+    println!("Device ID   : {}", identity.device_id);
+    println!("Server UUID : {}", identity.server_identifier);
+    println!("PIN Code    : {:04}", server.config().pin);
+
+    let (init_speed, init_accel, init_verbose) = delegate.get_touchpad_settings();
+    let initial_mode_str = if mouse_mode.load(std::sync::atomic::Ordering::SeqCst) {
+        "🖱️  Mouse Cursor (鼠标光标模式)"
+    } else {
+        "◀▲▼▶ Direction Keys (上下左右模式)"
+    };
+    println!("Input Mode  : {initial_mode_str}");
+    println!(
+        "Touchpad    : Speed={:.2}x, Accel={}, VerboseEvents={}",
+        init_speed,
+        if init_accel { "Enabled" } else { "Disabled" },
+        if init_verbose { "Enabled (Info)" } else { "Quiet (Debug)" }
+    );
+    println!("Interactive : 'm' toggle mode, 's <speed>' adjust speed, 'v' toggle verbose events");
+
+    // Spawn terminal input listener for dynamic mode, speed, and verbose logging switching
+    let mouse_mode_terminal = mouse_mode.clone();
+    let delegate_terminal = delegate.clone();
+    let inspector_terminal = server.inspector();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let stdin = tokio::io::stdin();
+        let mut reader = tokio::io::BufReader::new(stdin).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            let trimmed = line.trim();
+            if trimmed.eq_ignore_ascii_case("m") || trimmed.eq_ignore_ascii_case("mode") {
+                let current = mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst);
+                let new_mode = !current;
+                mouse_mode_terminal.store(new_mode, std::sync::atomic::Ordering::SeqCst);
+                delegate_terminal.on_mode_changed(new_mode);
+                inspector_terminal.emit(
+                    "mode_changed",
+                    &format!("{{\"mouse_mode\":{}}}", new_mode),
+                );
+                let desc = if new_mode {
+                    "🖱️  Mouse Cursor (鼠标光标模式)"
+                } else {
+                    "◀▲▼▶ Direction Keys (上下左右模式)"
+                };
+                println!("\n🔄 [模式切换] 当前已切换为: {desc}\n");
+            } else if trimmed.starts_with("s ") || trimmed.starts_with("speed ") {
+                let val_str = trimmed.split_whitespace().nth(1).unwrap_or("");
+                if let Ok(val) = val_str.parse::<f64>() {
+                    let (_, accel, verbose) = delegate_terminal.get_touchpad_settings();
+                    let new_speed = val.clamp(0.1, 10.0);
+                    delegate_terminal.on_touchpad_settings_changed(new_speed, accel, verbose);
+                    inspector_terminal.emit(
+                        "touchpad_settings",
+                        &format!(
+                            "{{\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{accel},\"verbose_events\":{verbose}}}",
+                            mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst)
+                        ),
+                    );
+                    println!("\n⚡ [驱动灵敏度] 鼠标速度已调整为: {new_speed:.2}x\n");
+                } else {
+                    println!("\n⚠️ 用法: s <速度数值>，例如: s 1.5\n");
+                }
+            } else if trimmed.eq_ignore_ascii_case("v") || trimmed.eq_ignore_ascii_case("verbose") {
+                let (speed, accel, cur_verbose) = delegate_terminal.get_touchpad_settings();
+                let new_verbose = !cur_verbose;
+                delegate_terminal.on_touchpad_settings_changed(speed, accel, new_verbose);
+                inspector_terminal.emit(
+                    "touchpad_settings",
+                    &format!(
+                        "{{\"mouse_mode\":{},\"speed\":{speed:.2},\"accel\":{accel},\"verbose_events\":{new_verbose}}}",
+                        mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst)
+                    ),
+                );
+                let desc = if new_verbose { "开启 (Info 级别)" } else { "静默 (Debug 级别)" };
+                println!("\n📢 [事件日志输出] 已切换为: {desc}\n");
+            }
+        }
+    });
+
     if let Some(port) = server.ui_port() {
         let url = format!("http://127.0.0.1:{port}");
-        println!("Debug UI  : {url}");
+        println!("Debug UI    : {url}");
         if open_browser {
             #[cfg(target_os = "macos")]
             let _ = tokio::process::Command::new("/usr/bin/open")

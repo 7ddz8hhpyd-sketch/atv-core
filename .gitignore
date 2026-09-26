@@ -11,13 +11,15 @@ local.properties
 captures/
 .navigation/
 
-# Android output packages
+# Output packages
 *.apk
 *.aab
 *.aar
 *.ap_
 *.dex
 *.class
+*.dmg
+*.app/
 
 # Native libraries / Compiled objects
 *.so
@@ -65,3 +67,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Certificates and keys
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
