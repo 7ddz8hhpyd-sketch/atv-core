@@ -5,9 +5,10 @@
 //! keys), the MRP port answering minimal framing, and the AirPlay port
 //! answering HTTP "OK".
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(not(target_os = "macos"))]
 use mdns_sd::{ServiceDaemon, ServiceInfo};
@@ -23,6 +24,7 @@ use crate::delegate::{AtvDelegate, EventKind};
 use crate::error::{Error, Result};
 use crate::identity::{self, DeviceIdentity};
 use crate::inspector::InspectorHub;
+use crate::registry::{ActiveConnectionTracker, DeviceRegistry};
 use crate::session::{CompanionSession, DEVICE_MODEL};
 use crate::FrameType;
 
@@ -92,6 +94,8 @@ pub struct AtvServer {
     config: AtvConfig,
     identity: DeviceIdentity,
     ip: Ipv4Addr,
+    mrp_port: u16,
+    companion_port: u16,
     airplay_port: u16,
     ui_port: Option<u16>,
     inspector: Arc<InspectorHub>,
@@ -135,8 +139,9 @@ impl AtvServer {
             None => detect_local_ip()?,
         };
 
-        let mrp_listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, MRP_PORT)).await?;
-        let companion_listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, COMPANION_PORT)).await?;
+        let (mrp_listener, mrp_port) = bind_with_fallback(MRP_PORT, "MRP").await?;
+        let (companion_listener, companion_port) =
+            bind_with_fallback(COMPANION_PORT, "Companion").await?;
         // Port 7000 is normally occupied when macOS AirPlay Receiver is on;
         // we only need this endpoint for discovery, so let the OS choose.
         let airplay_listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
@@ -217,7 +222,7 @@ impl AtvServer {
         let services: Vec<(&str, u16, Vec<(&str, &str)>)> = vec![
             (
                 "_mediaremotetv._tcp.local.",
-                MRP_PORT,
+                mrp_port,
                 vec![
                     ("Name", identity.name.as_str()),
                     ("UniqueIdentifier", identity.unique_id.as_str()),
@@ -229,7 +234,7 @@ impl AtvServer {
             ),
             (
                 "_companion-link._tcp.local.",
-                COMPANION_PORT,
+                companion_port,
                 vec![
                     ("rpMac", "1"),
                     ("rpHA", rpha.as_str()),
@@ -319,8 +324,8 @@ impl AtvServer {
         info!("Device ID : {}", identity.device_id);
         info!("Server ID : {}", identity.server_identifier);
         info!("PIN       : {:04}", config.pin);
-        info!("MRP       : {ip}:{MRP_PORT}");
-        info!("Companion : {ip}:{COMPANION_PORT}");
+        info!("MRP       : {ip}:{mrp_port}");
+        info!("Companion : {ip}:{companion_port}");
         info!("AirPlay   : {ip}:{airplay_port}");
         if let Some(port) = actual_ui_port {
             info!("Debug UI  : http://127.0.0.1:{port}");
@@ -330,6 +335,8 @@ impl AtvServer {
             config,
             identity,
             ip,
+            mrp_port,
+            companion_port,
             airplay_port,
             ui_port: actual_ui_port,
             inspector,
@@ -360,11 +367,11 @@ impl AtvServer {
     }
 
     pub fn mrp_port(&self) -> u16 {
-        MRP_PORT
+        self.mrp_port
     }
 
     pub fn companion_port(&self) -> u16 {
-        COMPANION_PORT
+        self.companion_port
     }
 
     pub fn airplay_port(&self) -> u16 {
@@ -433,6 +440,24 @@ impl AtvServer {
     }
 }
 
+/// Bind `preferred`, falling back to an OS-assigned port when it is occupied.
+/// The chosen port is advertised via Bonjour, so iOS finds the service either way.
+async fn bind_with_fallback(preferred: u16, label: &str) -> Result<(TcpListener, u16)> {
+    match TcpListener::bind((Ipv4Addr::UNSPECIFIED, preferred)).await {
+        Ok(listener) => Ok((listener, preferred)),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+            let port = listener.local_addr()?.port();
+            warn!(
+                "{label} port {preferred} is already in use ({e}); \
+                 falling back to ephemeral port {port}"
+            );
+            Ok((listener, port))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Return the IPv4 address used to reach the local network (UDP-connect
 /// trick, like `fake_atv.detect_local_ip`).
 pub fn detect_local_ip() -> Result<Ipv4Addr> {
@@ -468,6 +493,9 @@ async fn companion_loop(
     mouse_mode: Arc<AtomicBool>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let registry = Arc::new(Mutex::new(DeviceRegistry::new(Duration::from_secs(24 * 3600))));
+    let active_tracker = Arc::new(Mutex::new(ActiveConnectionTracker::new()));
+
     loop {
         let stream = tokio::select! {
             accepted = listener.accept() => match accepted {
@@ -483,10 +511,12 @@ async fn companion_loop(
         let delegate = delegate.clone();
         let inspector = inspector.clone();
         let mouse_mode = mouse_mode.clone();
+        let registry = registry.clone();
+        let active_tracker = active_tracker.clone();
         let mut client_shutdown = shutdown.clone();
         tokio::spawn(async move {
             tokio::select! {
-                _ = handle_companion(stream, identity, pin, delegate, inspector, mouse_mode) => {},
+                _ = handle_companion(stream, identity, pin, delegate, inspector, mouse_mode, registry, active_tracker) => {},
                 _ = client_shutdown.changed() => {},
             }
         });
@@ -500,15 +530,28 @@ async fn handle_companion(
     delegate: Arc<dyn AtvDelegate>,
     inspector: Arc<InspectorHub>,
     mouse_mode: Arc<AtomicBool>,
+    registry: Arc<Mutex<DeviceRegistry>>,
+    active_tracker: Arc<Mutex<ActiveConnectionTracker>>,
 ) {
-    let peer = stream
-        .peer_addr()
+    let peer_addr = stream.peer_addr().ok();
+    let peer = peer_addr
+        .as_ref()
         .map(|a| a.to_string())
-        .unwrap_or_else(|_| "?".into());
+        .unwrap_or_else(|| "?".into());
+    let peer_ip = peer_addr
+        .map(|a| a.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
     info!("companion client connected: {peer}");
     inspector.add_client(&peer);
     delegate.on_event(EventKind::ClientConnected, &peer);
     inspector.emit("client_connected", &format!("{{\"peer\":\"{peer}\"}}"));
+
+    let session_established = Arc::new(AtomicBool::new(false));
+    let (conn_id, mut abort_rx) = {
+        let mut tracker = active_tracker.lock().await;
+        tracker.register(peer_ip, session_established.clone())
+    };
 
     let (mut reader, writer) = stream.into_split();
     let writer = Arc::new(Mutex::new(writer));
@@ -519,20 +562,52 @@ async fn handle_companion(
         pin,
         mouse_mode,
         inspector.clone(),
+        registry,
+        active_tracker.clone(),
+        conn_id,
+        peer_ip.to_string(),
+        session_established,
     );
+    let timeout_deadline = session.timeout_deadline();
     let mut disconnect_reason = "peer_closed".to_string();
 
     const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024; // 2MB protection against malformed frames
 
     loop {
+        let deadline = *timeout_deadline.lock().await;
+        let timeout_fut = async {
+            if let Some(dl) = deadline {
+                tokio::time::sleep_until(dl).await;
+                true
+            } else {
+                std::future::pending::<bool>().await
+            }
+        };
+
         let mut header = [0u8; 4];
-        match reader.read_exact(&mut header).await {
-            Ok(_) => {}
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                    disconnect_reason = format!("error:{e}");
+        tokio::select! {
+            res = reader.read_exact(&mut header) => {
+                match res {
+                    Ok(_) => {}
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                            disconnect_reason = format!("error:{e}");
+                        }
+                        break;
+                    }
                 }
+            }
+            _ = abort_rx.changed() => {
+                disconnect_reason = "superseded".to_string();
+                info!("companion connection from {peer} superseded by new connection");
                 break;
+            }
+            _ = timeout_fut => {
+                if !session.is_established() {
+                    disconnect_reason = "sessionless_timeout".to_string();
+                    info!("companion connection from {peer} timed out without remote session; closing to free channel");
+                    break;
+                }
             }
         }
         let Some(frame_type) = FrameType::from_u8(header[0]) else {
@@ -557,6 +632,11 @@ async fn handle_companion(
             warn!("companion error: {e}");
             break;
         }
+    }
+
+    {
+        let mut tracker = active_tracker.lock().await;
+        tracker.unregister(conn_id);
     }
 
     info!("companion client disconnected: {peer}");

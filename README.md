@@ -52,7 +52,36 @@ A high-performance Rust implementation of the Apple TV Companion Link / MRP prot
 * 点击菜单栏图标可随时切换「🖱️ 鼠标光标模式」与「◀▲▼▶ 方向键模式」，并可一键调节 0.5x ~ 2.0x 灵敏度预设与动态加速度。
 * 当 iPhone 连接或断开时，系统会自动弹出原生通知横幅提醒。
 
+### 🚨 在另一台 Mac 上无法启动？常见原因与解决方案
+
+**原因 1：架构不匹配（Intel vs Apple Silicon）**
+
+默认 `cargo build --release` 只编译当前机器架构（M 系列 → `arm64`，Intel → `x86_64`）。
+`build_app.sh` 已支持编译 **Universal Binary**（同时包含 arm64 + x86_64），两台 Mac 均可运行。
+如果是直接转移旧版构建产物，请在源机上重新运行 `./scripts/build_app.sh` 再分发。
+
+**原因 2：Gatekeeper 拒绝启动（自签名证书不受信任）**
+
+`Corvo Development` / `AppleTVRemote Development` 是本机私有自签名证书，
+在**另一台 Mac** 上 macOS Gatekeeper 会显示「无法验证此 App 不包含恶意软件」并拒绝打开。
+
+解决方案（任选其一）：
+
+```bash
+# 方案 A — 在目标 Mac 上导入证书（推荐私人分发）
+# 1. 将仓库根目录的 Corvo_Development.p12 复制到目标 Mac
+./scripts/import_certificate.sh Corvo_Development.p12
+
+# 方案 B — 在目标 Mac 上一次性跳过 Gatekeeper
+xattr -dr com.apple.quarantine /Applications/AppleTVRemote.app
+# 或者：在 Finder 中右键 App → 选择「打开」→ 点击弹窗中的「打开」
+
+# 方案 C — 使用 Apple Developer 正式账号签名（用于公开分发）
+CODESIGN_IDENTITY="Apple Development: you@example.com" ./scripts/build_app.sh
+```
+
 ---
+
 
 ## 1. macOS Usage
 

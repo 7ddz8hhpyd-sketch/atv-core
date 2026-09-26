@@ -100,7 +100,16 @@ final class ProcessManager {
         }
 
         p.terminationHandler = { [weak self] proc in
-            print("⚠️ atv-core process terminated with exit code \(proc.terminationStatus)")
+            let code = proc.terminationStatus
+            let reason = proc.terminationReason == .exit ? "exit" : "signal"
+            let msg = "⚠️ atv-core terminated: \(reason) code=\(code)\n"
+            print(msg)
+            if let self,
+               let fh = try? FileHandle(forWritingTo: self.logFile) {
+                fh.seekToEndOfFile()
+                fh.write(msg.data(using: .utf8) ?? Data())
+                try? fh.close()
+            }
             self?.process = nil
         }
 
@@ -109,15 +118,30 @@ final class ProcessManager {
             self.process = p
             print("🚀 Started atv-core (PID \(p.processIdentifier)) from \(binaryUrl.path)")
 
-            // Wait briefly for server startup, then verify
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) {
-                ApiClient.shared.fetchStatus { status in
-                    completion(status != nil)
+            // Poll every 0.5s until the HTTP API responds (up to 3s total).
+            // A single 0.8s wait was too short on first-run / slower machines.
+            pollForService(attemptsLeft: 6, completion: completion)
+        } catch {
+            print("❌ Failed to launch atv-core: \(error)")
+            completion(false)
+        }
+    }
+
+    /// Polls /api/status every 0.5 s, up to `attemptsLeft` times.
+    private func pollForService(attemptsLeft: Int, completion: @escaping (Bool) -> Void) {
+        guard attemptsLeft > 0 else {
+            print("❌ atv-core did not respond within 3 s — check \(logFile.path)")
+            completion(false)
+            return
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            ApiClient.shared.fetchStatus { status in
+                if status != nil {
+                    completion(true)
+                } else {
+                    self?.pollForService(attemptsLeft: attemptsLeft - 1, completion: completion)
                 }
             }
-        } catch {
-            print("❌ Failed to start atv-core process: \(error)")
-            completion(false)
         }
     }
 

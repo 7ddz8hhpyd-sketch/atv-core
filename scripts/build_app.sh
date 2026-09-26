@@ -10,9 +10,14 @@ echo "=========================================="
 
 cd "$ROOT_DIR"
 
-# 1. Compile Rust core binary
-echo "🦀 [1/4] Compiling Rust core engine (atv-cli)..."
-cargo build --release -p atv-cli
+# 1. Compile Rust core binary (Universal Binary: arm64 + x86_64)
+echo "🦀 [1/4] Compiling Rust core engine (atv-cli) as Universal Binary..."
+cargo build --release -p atv-cli --target aarch64-apple-darwin
+cargo build --release -p atv-cli --target x86_64-apple-darwin
+lipo -create -output "$ROOT_DIR/target/release/atv-cli" \
+    "$ROOT_DIR/target/aarch64-apple-darwin/release/atv-cli" \
+    "$ROOT_DIR/target/x86_64-apple-darwin/release/atv-cli"
+echo "   ✅ Universal Binary created: $(lipo -info "$ROOT_DIR/target/release/atv-cli")"
 
 # 2. Generate App Icon if missing
 if [ ! -f "$ROOT_DIR/mac-app/resources/AppIcon.icns" ]; then
@@ -28,9 +33,16 @@ BUILD_DIR="$ROOT_DIR/build"
 mkdir -p "$BUILD_DIR"
 
 SWIFT_BIN="$BUILD_DIR/AppleTVRemote"
+# Build Universal Binary for Swift (arm64 + x86_64)
 swiftc -O -target arm64-apple-macos12.0 \
     "$ROOT_DIR"/mac-app/src/*.swift \
-    -o "$SWIFT_BIN"
+    -o "${SWIFT_BIN}_arm64"
+swiftc -O -target x86_64-apple-macos12.0 \
+    "$ROOT_DIR"/mac-app/src/*.swift \
+    -o "${SWIFT_BIN}_x86_64"
+lipo -create -output "$SWIFT_BIN" "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
+rm -f "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
+echo "   ✅ Universal Binary created: $(lipo -info "$SWIFT_BIN")"
 
 # 4. Assemble macOS .app Bundle
 APP_BUNDLE="$BUILD_DIR/AppleTVRemote.app"
@@ -119,3 +131,24 @@ codesign -dv --verbose=2 "$APP_BUNDLE" 2>&1 | grep -E "(Authority=|Signature=|Id
 echo "=========================================="
 echo "✅ Successfully built: $APP_BUNDLE"
 echo "=========================================="
+
+# ⚠️  Self-signed certificate distribution warning
+if echo "$SIGN_IDENTITY" | grep -qE "(Corvo Development|AppleTVRemote Development)"; then
+    echo ""
+    echo "⚠️  【跨机器分发提示】"
+    echo "当前使用的是本机自签名证书: \"$SIGN_IDENTITY\""
+    echo "该证书仅在本机钥匙串中受信任。将 App 分发到另一台 Mac 时，"
+    echo "对方 macOS Gatekeeper 会拒绝启动（显示「无法验证」错误）。"
+    echo ""
+    echo "解决方案 (任选其一):"
+    echo "  方案 A — 在目标 Mac 上导入证书 (推荐用于私人分发):"
+    echo "    ./scripts/import_certificate.sh Corvo_Development.p12"
+    echo ""
+    echo "  方案 B — 目标 Mac 上跳过 Gatekeeper (一次性):"
+    echo "    xattr -dr com.apple.quarantine /Applications/AppleTVRemote.app"
+    echo "    或: 右键 App -> 打开 -> 点击「打开」"
+    echo ""
+    echo "  方案 C — 使用 Apple Developer 账号正式签名 (用于公开分发):"
+    echo "    CODESIGN_IDENTITY=\"Apple Development: you@example.com\" ./scripts/build_app.sh"
+    echo "=========================================="
+fi

@@ -34,12 +34,17 @@ ln -s /Applications "$STAGING_DIR/Applications"
 # Remove existing DMG if present
 rm -f "$DMG_PATH"
 
-echo "💿 Creating DMG image with hdiutil..."
+# ------------------------------------------------------------------
+# Create the compressed read-only DMG (UDZO) directly from staging.
+# No mount / Finder layout pass: the build stays fully silent.
+# ------------------------------------------------------------------
+echo "💿 Creating compressed DMG..."
 hdiutil create \
     -volname "Apple TV Remote" \
     -srcfolder "$STAGING_DIR" \
     -ov \
     -format UDZO \
+    -imagekey zlib-level=9 \
     "$DMG_PATH"
 
 # Clean staging directory
@@ -49,4 +54,8 @@ echo "=========================================="
 echo "🎉 DMG Packaging Complete!"
 echo "📦 Output file: $DMG_PATH"
 echo "📏 File size: $(ls -lh "$DMG_PATH" | awk '{print $5}')"
+echo ""
+echo "DMG 内容:"
+echo "  ✅ AppleTVRemote.app   — 主程序"
+echo "  ✅ Applications        — 快捷安装入口"
 echo "=========================================="

@@ -17,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::identity::DeviceIdentity;
 use crate::inspector::InspectorHub;
 use crate::opack::{self, Value};
+use crate::registry::{ActiveConnectionTracker, DeviceRegistry};
 use crate::srp::SrpServer;
 use crate::tlv::{self, tags};
 use crate::FrameType;
@@ -91,6 +92,12 @@ pub struct CompanionSession {
     system_status: u64,
     display_power_on: bool,
     inspector: Arc<InspectorHub>,
+    registry: Arc<Mutex<DeviceRegistry>>,
+    active_tracker: Arc<Mutex<ActiveConnectionTracker>>,
+    conn_id: u64,
+    peer_ip: String,
+    device_id: Option<String>,
+    timeout_deadline: Arc<Mutex<Option<tokio::time::Instant>>>,
 }
 
 impl CompanionSession {
@@ -101,6 +108,11 @@ impl CompanionSession {
         pin: u32,
         mouse_mode: Arc<AtomicBool>,
         inspector: Arc<InspectorHub>,
+        registry: Arc<Mutex<DeviceRegistry>>,
+        active_tracker: Arc<Mutex<ActiveConnectionTracker>>,
+        conn_id: u64,
+        peer_ip: String,
+        session_established: Arc<AtomicBool>,
     ) -> Self {
         let signing_key = SigningKey::from_bytes(&identity.private_key);
         let auth_pub = signing_key.verifying_key().to_bytes();
@@ -125,7 +137,7 @@ impl CompanionSession {
             current_identifier: None,
             srp: SrpServer::new(pin, &identity.private_key),
             remote_session_id,
-            session_established: Arc::new(AtomicBool::new(false)),
+            session_established,
             touch_origin: None,
             touch_last: None,
             touch_moved: false,
@@ -134,7 +146,25 @@ impl CompanionSession {
             system_status: 3, // Awake
             display_power_on: true,
             inspector,
+            registry,
+            active_tracker,
+            conn_id,
+            peer_ip,
+            device_id: None,
+            timeout_deadline: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn is_established(&self) -> bool {
+        self.session_established.load(Ordering::SeqCst)
+    }
+
+    pub fn timeout_deadline(&self) -> Arc<Mutex<Option<tokio::time::Instant>>> {
+        self.timeout_deadline.clone()
+    }
+
+    pub fn device_id(&self) -> Option<String> {
+        self.device_id.clone()
     }
 
     async fn write_raw(&self, bytes: &[u8]) -> Result<()> {
@@ -526,13 +556,23 @@ impl CompanionSession {
         self.delegate.on_event(EventKind::Verified, "");
         self.inspector.emit("verified", "{}");
 
+        // Kick connections that do not send _sessionStart within 3.0s
+        *self.timeout_deadline.lock().await =
+            Some(tokio::time::Instant::now() + std::time::Duration::from_millis(3000));
+
         Ok(())
     }
 
     async fn handle_control(&mut self, data: &Value) -> Result<()> {
         self.delegate
             .on_event(EventKind::ControlMessage, &data.to_string());
-        let identifier = data.get("_i").and_then(Value::as_str).map(str::to_string);
+        // iOS 27 sends `_systemInfo` with the identifier in the `model` key
+        // instead of `_i`; accept both so the `_systemInfo` arm below fires.
+        let identifier = data
+            .get("_i")
+            .or_else(|| data.get("model"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         self.current_identifier = identifier.clone();
         let xid = data.get("_x").and_then(Value::as_int);
         let content = data.get("_c").cloned().unwrap_or(Value::dict(vec![]));
@@ -540,6 +580,7 @@ impl CompanionSession {
         match identifier.as_deref() {
             Some("_sessionStart") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.inspector.session_started();
                 let local_sid = content
                     .get("_sid")
@@ -566,6 +607,7 @@ impl CompanionSession {
             }
             Some("TVRCSessionStart") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.inspector.session_started();
                 let version = content
                     .get("ProtocolVersionKey")
@@ -600,20 +642,24 @@ impl CompanionSession {
             }
             Some("_hidC") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.handle_hid_command(&content, xid).await?;
             }
             Some("_touchStart") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.send_response(xid, Some(Value::dict(vec![Value::kv("_i", Value::Int(1))])), 0)
                     .await?;
             }
             Some("_hidT") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.send_response(xid, None, 0).await?;
                 self.handle_touch(&content);
             }
             Some("_touchStop") | Some("_touchMove") | Some("_tiStop") => {
                 self.session_established.store(true, Ordering::SeqCst);
+                *self.timeout_deadline.lock().await = None;
                 self.send_response(xid, None, 0).await?;
             }
             Some("_interest") => {
@@ -723,9 +769,41 @@ impl CompanionSession {
                 self.send_response(xid, None, 0).await?;
             }
             Some("_systemInfo") | Some("SystemInfo") => {
+                let ids_id = content.get("_idsID").and_then(Value::as_str);
+                let pub_id = content.get("_pubID").and_then(Value::as_str);
+                let name = content.get("name").and_then(Value::as_str).unwrap_or("");
+                let model = content.get("model").and_then(Value::as_str).unwrap_or("");
+
+                let primary_id = ids_id.or(pub_id).unwrap_or(&self.peer_ip);
+                let alias_id = if ids_id.is_some() { pub_id } else { None };
+
+                let (session_id, is_renewed) = {
+                    let mut reg = self.registry.lock().await;
+                    reg.get_or_register(primary_id, alias_id, name, model)
+                };
+                self.remote_session_id = session_id;
+                self.device_id = Some(primary_id.to_string());
+
+                {
+                    let mut tracker = self.active_tracker.lock().await;
+                    tracker.set_device_id(self.conn_id, primary_id);
+                }
+
                 self.send_response(xid, None, 0).await?;
-                info!("<< _systemInfo: replied and refreshed power state");
+                info!("<< _systemInfo: replied and refreshed power state (session_id={session_id}, renewed={is_renewed})");
                 self.send_power_state(None).await?;
+
+                // Background probes from sharingd/rapportd have high bit set in xid (>= 0x80000000)
+                // and never send _sessionStart. Real remote control (tvremoted) sends _sessionStart
+                // within 10-20ms. If probe, set a short 1.0s timeout to release the channel.
+                let is_background_probe = xid.map_or(false, |x| (x & 0x8000_0000) != 0);
+                let timeout = if is_background_probe {
+                    std::time::Duration::from_millis(1000)
+                } else {
+                    std::time::Duration::from_millis(2500)
+                };
+                *self.timeout_deadline.lock().await =
+                    Some(tokio::time::Instant::now() + timeout);
             }
             _ => {
                 if let Some(id) = &identifier {
