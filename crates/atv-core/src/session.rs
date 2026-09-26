@@ -535,17 +535,6 @@ impl CompanionSession {
     }
 
     async fn handle_control(&mut self, data: &Value) -> Result<()> {
-        // On the first encrypted control message, push the current power state.
-        // Doing it here (rather than in pair_verify_m3) guarantees that iOS has
-        // fully switched its cipher context before we send E_OPACK — this
-        // prevents the reconnect hang where iOS drops our premature push and
-        // then waits forever for a power state event that never arrives again.
-        if !self.power_state_pushed {
-            self.power_state_pushed = true;
-            info!("pushing initial power state (Awake) on first encrypted message");
-            self.send_power_state(None).await?;
-        }
-
         self.delegate
             .on_event(EventKind::ControlMessage, &data.to_string());
         let identifier = data.get("_i").and_then(Value::as_str).map(str::to_string);
