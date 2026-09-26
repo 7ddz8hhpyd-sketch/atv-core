@@ -106,11 +106,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android NDK & Build Tools
         run: |
+          yes | sdkmanager --licenses > /dev/null || true
           sdkmanager --install "ndk;26.1.10909125" "build-tools;34.0.0"
 
       - name: Setup Rust toolchain
