@@ -237,22 +237,30 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Touchpad Controls (Active only when service is running)
-        let modeHeader = NSMenuItem(title: "触控板模式", action: nil, keyEquivalent: "")
+        // 4. Touchpad Controls (Active only when service is running - 3-way single choice radio)
+        let modeHeader = NSMenuItem(title: "触控板运行模式 (单选)", action: nil, keyEquivalent: "")
         modeHeader.isEnabled = false
         menu.addItem(modeHeader)
 
+        let curMode = currentStatus?.currentTrackpadMode ?? (isMouse ? "mouse" : "direction")
+
         let mouseItem = NSMenuItem(title: "  🖱️ 鼠标光标模式 (Mouse)", action: #selector(onSelectMouseMode), keyEquivalent: "")
         mouseItem.target = self
-        mouseItem.state = (isOnline && isMouse) ? .on : .off
+        mouseItem.state = (isOnline && curMode == "mouse") ? .on : .off
         mouseItem.isEnabled = isOnline
         menu.addItem(mouseItem)
 
         let dirItem = NSMenuItem(title: "  ◀▲▼▶ 方向键模式 (D-pad)", action: #selector(onSelectDirectionMode), keyEquivalent: "")
         dirItem.target = self
-        dirItem.state = (isOnline && !isMouse) ? .on : .off
+        dirItem.state = (isOnline && curMode == "direction") ? .on : .off
         dirItem.isEnabled = isOnline
         menu.addItem(dirItem)
+
+        let idleItem = NSMenuItem(title: "  👁️ 触控板空置模式 (仅看轨迹实时预览)", action: #selector(onSelectIdleMode), keyEquivalent: "")
+        idleItem.target = self
+        idleItem.state = (isOnline && curMode == "idle") ? .on : .off
+        idleItem.isEnabled = isOnline
+        menu.addItem(idleItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -311,10 +319,19 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
         showTextItem.state = showStatusTextInBar ? .on : .off
         menu.addItem(showTextItem)
 
-        let webItem = NSMenuItem(title: "🌐 打开 Web 调试控制台...", action: #selector(onOpenWeb), keyEquivalent: "")
+        let webItem = NSMenuItem(title: "🌐 打开 Web 遥控控制台...", action: #selector(onOpenWeb), keyEquivalent: "")
         webItem.target = self
         webItem.isEnabled = isOnline
         menu.addItem(webItem)
+
+        let debugItem = NSMenuItem(title: "🛠️ 打开 Web 系统日志 (/debug)...", action: #selector(onOpenDebugWeb), keyEquivalent: "")
+        debugItem.target = self
+        debugItem.isEnabled = isOnline
+        menu.addItem(debugItem)
+
+        let logFileItem = NSMenuItem(title: "📄 打开本地日志文件 (atv-core.log)...", action: #selector(onOpenLogFile), keyEquivalent: "")
+        logFileItem.target = self
+        menu.addItem(logFileItem)
 
         let permItem = NSMenuItem(title: "🛡️ 检查辅助功能权限...", action: #selector(onCheckPermissions), keyEquivalent: "")
         permItem.target = self
@@ -404,13 +421,19 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
     }
 
     @objc private func onSelectMouseMode() {
-        ApiClient.shared.updateSettings(mouseMode: true) { [weak self] _ in
+        ApiClient.shared.updateSettings(mode: "mouse") { [weak self] _ in
             self?.refresh()
         }
     }
 
     @objc private func onSelectDirectionMode() {
-        ApiClient.shared.updateSettings(mouseMode: false) { [weak self] _ in
+        ApiClient.shared.updateSettings(mode: "direction") { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    @objc private func onSelectIdleMode() {
+        ApiClient.shared.updateSettings(mode: "idle") { [weak self] _ in
             self?.refresh()
         }
     }
@@ -439,6 +462,14 @@ final class StatusItemManager: NSObject, NSMenuDelegate {
 
     @objc private func onOpenWeb() {
         ApiClient.shared.openWebDashboard()
+    }
+
+    @objc private func onOpenDebugWeb() {
+        ApiClient.shared.openDebugPage()
+    }
+
+    @objc private func onOpenLogFile() {
+        ProcessManager.shared.openLogFile()
     }
 
     @objc private func onCheckPermissions() {

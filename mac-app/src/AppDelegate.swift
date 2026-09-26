@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AccessibilityHelper.checkAndPrompt(userInitiated: false)
         }
 
+        // Start native Swift Debug Web Server on port 8766
+        DebugWebServer.shared.start(port: 8766)
+
         // Start the atv-core Rust backend process if not already running
         ProcessManager.shared.startCoreIfNeeded { success in
             if success {
@@ -25,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DebugWebServer.shared.stop()
         ProcessManager.shared.stopCore()
     }
 }

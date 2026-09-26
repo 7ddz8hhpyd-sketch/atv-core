@@ -184,4 +184,40 @@ final class ProcessManager {
     func stopCore() {
         stopService(completion: nil)
     }
+
+    var logFilePath: URL {
+        return logFile
+    }
+
+    /// Open log file in default application (e.g. Console.app / TextEdit)
+    func openLogFile() {
+        if FileManager.default.fileExists(atPath: logFile.path) {
+            NSWorkspace.shared.open(logFile)
+        } else {
+            NSWorkspace.shared.open(logDir)
+        }
+    }
+
+    /// Reveal log file in Finder
+    func revealLogInFinder() {
+        if FileManager.default.fileExists(atPath: logFile.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([logFile])
+        } else {
+            NSWorkspace.shared.open(logDir)
+        }
+    }
+
+    var isProcessAlive: Bool {
+        return process?.isRunning ?? false
+    }
+
+    var currentPID: Int32? {
+        return process?.isRunning == true ? process?.processIdentifier : nil
+    }
+
+    func clearLogFile() {
+        if FileManager.default.fileExists(atPath: logFile.path) {
+            try? "".write(to: logFile, atomically: true, encoding: .utf8)
+        }
+    }
 }

@@ -4,6 +4,7 @@ import AppKit
 struct ServerStatus: Codable {
     let status: String?
     let server_online: Bool?
+    let mode: String?
     let mouse_mode: Bool?
     let device_name: String?
     let mouse_speed: Double?
@@ -14,6 +15,15 @@ struct ServerStatus: Codable {
     let client_peer: String?
     let session_ready: Bool?
     let audio: AudioState?
+
+    var currentTrackpadMode: String {
+        if let m = mode {
+            if m == "idle" || m == "preview" { return "idle" }
+            if m == "direction" { return "direction" }
+            if m == "mouse" { return "mouse" }
+        }
+        return (mouse_mode == true) ? "mouse" : "direction"
+    }
 
     struct AudioState: Codable {
         let volume: Double?
@@ -60,6 +70,7 @@ final class ApiClient {
     }
 
     func updateSettings(
+        mode: String? = nil,
         mouseMode: Bool? = nil,
         speed: Double? = nil,
         accel: Bool? = nil,
@@ -72,7 +83,13 @@ final class ApiClient {
         }
 
         var dict: [String: Any] = [:]
-        if let m = mouseMode { dict["mouse_mode"] = m }
+        if let m = mode {
+            dict["mode"] = m
+            dict["mouse_mode"] = (m == "mouse")
+        } else if let mm = mouseMode {
+            dict["mode"] = mm ? "mouse" : "direction"
+            dict["mouse_mode"] = mm
+        }
         if let s = speed { dict["speed"] = s }
         if let a = accel { dict["accel"] = a }
         if let v = verbose { dict["verbose_events"] = v }
@@ -95,6 +112,12 @@ final class ApiClient {
 
     func openWebDashboard() {
         if let url = URL(string: baseUrl) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func openDebugPage() {
+        if let url = URL(string: "http://127.0.0.1:8766/") {
             NSWorkspace.shared.open(url)
         }
     }
