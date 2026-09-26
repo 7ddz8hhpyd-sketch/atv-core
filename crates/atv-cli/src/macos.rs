@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atv_core::{AtvDelegate, EventKind, TouchPhase};
+use atv_core::{AtvDelegate, EventKind, TouchPhase, TrackpadMode};
 use tracing::{debug, info, warn};
 
 #[repr(C)]
@@ -333,16 +333,24 @@ impl MacDelegate {
         new_mode
     }
 
-    pub fn notify_mode_changed(&self, mouse_mode: bool) {
+    pub fn notify_trackpad_mode_changed(&self, mode: TrackpadMode) {
         let title = "Apple TV Remote";
-        let message = if mouse_mode {
-            "已切换为: 🖱️ 鼠标光标模式 (Mouse Mode)"
-        } else {
-            "已切换为: ◀▲▼▶ 方向键模式 (Arrow Keys 上下左右)"
+        let message = match mode {
+            TrackpadMode::Mouse => "已切换为: 🖱️ 鼠标光标模式 (Mouse Mode)",
+            TrackpadMode::Direction => "已切换为: ◀▲▼▶ 方向键模式 (Arrow Keys 上下左右)",
+            TrackpadMode::Idle => "已切换为: 👁️ 触控板空置模式 (仅看轨迹实时预览)",
         };
         info!("[macOS] {message}");
         let script = format!("display notification \"{message}\" with title \"{title}\"");
         let _ = Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+    }
+
+    pub fn notify_mode_changed(&self, mouse_mode: bool) {
+        self.notify_trackpad_mode_changed(if mouse_mode {
+            TrackpadMode::Mouse
+        } else {
+            TrackpadMode::Direction
+        });
     }
 
     pub fn notify_media_action(&self, message: &str) {
@@ -698,6 +706,11 @@ impl AtvDelegate for MacDelegate {
                 .args(["-e", &script])
                 .status();
         });
+    }
+
+    fn on_trackpad_mode_changed(&self, mode: TrackpadMode) {
+        self.mouse_mode.store(mode == TrackpadMode::Mouse, Ordering::SeqCst);
+        self.notify_trackpad_mode_changed(mode);
     }
 
     fn on_mode_changed(&self, mouse_mode: bool) {

@@ -44,6 +44,70 @@ pub enum EventKind {
     MouseClick,
 }
 
+/// Operating mode for the Apple TV Remote touch surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TrackpadMode {
+    /// Directional arrow keys (Up, Down, Left, Right) and Select.
+    Direction = 0,
+    /// Mouse pointer control and click.
+    Mouse = 1,
+    /// Idle mode: purely broadcast real-time touch trajectory for preview; no mouse move or arrow key actions triggered.
+    Idle = 2,
+}
+
+impl TrackpadMode {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Direction,
+            1 => Self::Mouse,
+            2 => Self::Idle,
+            _ => Self::Direction,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Direction => "direction",
+            Self::Mouse => "mouse",
+            Self::Idle => "idle",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        let trimmed = s.trim().to_ascii_lowercase();
+        if trimmed == "direction" || trimmed == "dpad" || trimmed == "arrow" || trimmed == "false" {
+            Some(Self::Direction)
+        } else if trimmed == "mouse" || trimmed == "true" {
+            Some(Self::Mouse)
+        } else if trimmed == "idle" || trimmed == "preview" || trimmed == "noop" || trimmed == "dummy" {
+            Some(Self::Idle)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_mouse(&self) -> bool {
+        *self == Self::Mouse
+    }
+
+    pub fn is_idle(&self) -> bool {
+        *self == Self::Idle
+    }
+
+    pub fn is_direction(&self) -> bool {
+        *self == Self::Direction
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Direction => Self::Mouse,
+            Self::Mouse => Self::Idle,
+            Self::Idle => Self::Direction,
+        }
+    }
+}
+
 /// Callbacks invoked (synchronously, from tokio tasks) when the phone
 /// interacts with the simulated Apple TV.
 ///
@@ -66,7 +130,12 @@ pub trait AtvDelegate: Send + Sync + 'static {
     /// Lifecycle/state event with a human-readable detail string.
     fn on_event(&self, _kind: EventKind, _detail: &str) {}
 
-    /// Called when the input mode (directional vs mouse) changes.
+    /// Called when the input mode changes (trackpad mode: Direction, Mouse, or Idle).
+    fn on_trackpad_mode_changed(&self, mode: TrackpadMode) {
+        self.on_mode_changed(mode.is_mouse());
+    }
+
+    /// Called when the input mode (directional vs mouse) changes (legacy boolean method).
     fn on_mode_changed(&self, _mouse_mode: bool) {}
 
     /// Set touchpad settings: speed factor, acceleration toggle, and verbose event logging toggle.

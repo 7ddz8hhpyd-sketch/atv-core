@@ -23,7 +23,7 @@ pub mod settings;
 pub mod srp;
 pub mod tlv;
 
-pub use delegate::{AtvDelegate, EventKind, TouchPhase};
+pub use delegate::{AtvDelegate, EventKind, TouchPhase, TrackpadMode};
 pub use error::{Error, Result};
 pub use identity::DeviceIdentity;
 pub use inspector::InspectorHub;

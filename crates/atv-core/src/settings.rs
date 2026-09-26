@@ -16,6 +16,7 @@ pub const MAX_MOUSE_SPEED: f64 = 10.0;
 pub struct UserSettings {
     pub mouse_speed: f64,
     pub mouse_mode: Option<bool>,
+    pub trackpad_mode: Option<String>,
     pub mouse_accel: Option<bool>,
     pub verbose_events: Option<bool>,
 }
@@ -25,6 +26,7 @@ impl Default for UserSettings {
         Self {
             mouse_speed: DEFAULT_MOUSE_SPEED,
             mouse_mode: None,
+            trackpad_mode: None,
             mouse_accel: None,
             verbose_events: None,
         }
@@ -85,8 +87,21 @@ impl UserSettings {
             settings.mouse_speed = sp.clamp(MIN_MOUSE_SPEED, MAX_MOUSE_SPEED);
         }
 
-        if let Some(mode) = extract_bool(json, "mouse_mode").or_else(|| extract_bool(json, "mode")) {
+        let mode_str = extract_string(json, "trackpad_mode").or_else(|| extract_string(json, "mode"));
+        if let Some(ref m) = mode_str {
+            settings.trackpad_mode = Some(m.clone());
+            if m == "mouse" {
+                settings.mouse_mode = Some(true);
+            } else if m == "direction" || m == "idle" {
+                settings.mouse_mode = Some(false);
+            }
+        }
+
+        if let Some(mode) = extract_bool(json, "mouse_mode") {
             settings.mouse_mode = Some(mode);
+            if settings.trackpad_mode.is_none() {
+                settings.trackpad_mode = Some(if mode { "mouse".into() } else { "direction".into() });
+            }
         }
 
         if let Some(accel) = extract_bool(json, "mouse_accel").or_else(|| extract_bool(json, "accel")) {
@@ -104,6 +119,9 @@ impl UserSettings {
     pub fn to_json(&self) -> String {
         let mut fields = Vec::new();
         fields.push(format!("  \"mouse_speed\": {:.2}", self.mouse_speed));
+        if let Some(ref mode) = self.trackpad_mode {
+            fields.push(format!("  \"trackpad_mode\": \"{mode}\""));
+        }
         if let Some(mode) = self.mouse_mode {
             fields.push(format!("  \"mouse_mode\": {mode}"));
         }
@@ -143,17 +161,41 @@ impl UserSettings {
     pub fn update_mouse_mode(new_mode: bool) {
         let mut s = Self::load();
         s.mouse_mode = Some(new_mode);
+        s.trackpad_mode = Some(if new_mode { "mouse".into() } else { "direction".into() });
+        let _ = s.save();
+    }
+
+    /// Update trackpad mode (mouse, direction, idle) and persist to disk.
+    pub fn update_trackpad_mode(new_mode: &str) {
+        let mut s = Self::load();
+        s.trackpad_mode = Some(new_mode.to_string());
+        s.mouse_mode = Some(new_mode == "mouse");
         let _ = s.save();
     }
 
     /// Update all touchpad settings and persist to disk.
     pub fn update_all(speed: f64, accel: bool, verbose: bool, mouse_mode: Option<bool>) {
+        Self::update_all_with_mode(speed, accel, verbose, None, mouse_mode);
+    }
+
+    /// Update all touchpad settings including explicit trackpad mode string.
+    pub fn update_all_with_mode(
+        speed: f64,
+        accel: bool,
+        verbose: bool,
+        trackpad_mode: Option<&str>,
+        mouse_mode: Option<bool>,
+    ) {
         let mut s = Self::load();
         s.mouse_speed = speed.clamp(MIN_MOUSE_SPEED, MAX_MOUSE_SPEED);
         s.mouse_accel = Some(accel);
         s.verbose_events = Some(verbose);
-        if let Some(mode) = mouse_mode {
+        if let Some(tm) = trackpad_mode {
+            s.trackpad_mode = Some(tm.to_string());
+            s.mouse_mode = Some(tm == "mouse");
+        } else if let Some(mode) = mouse_mode {
             s.mouse_mode = Some(mode);
+            s.trackpad_mode = Some(if mode { "mouse".into() } else { "direction".into() });
         }
         let _ = s.save();
     }
@@ -185,6 +227,20 @@ fn extract_bool(json: &str, key: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+fn extract_string(json: &str, key: &str) -> Option<String> {
+    let quoted = format!("\"{key}\"");
+    let idx = json.find(&quoted)?;
+    let rest = &json[idx + quoted.len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let rest = &rest[1..];
+    let quote_end = rest.find('"')?;
+    Some(rest[..quote_end].to_string())
 }
 
 #[cfg(test)]
@@ -225,6 +281,7 @@ mod tests {
         let settings = UserSettings {
             mouse_speed: 0.65,
             mouse_mode: Some(true),
+            trackpad_mode: Some("mouse".into()),
             mouse_accel: Some(false),
             verbose_events: Some(true),
         };
@@ -235,10 +292,19 @@ mod tests {
 
         assert!((loaded.mouse_speed - 0.65).abs() < 1e-6);
         assert_eq!(loaded.mouse_mode, Some(true));
+        assert_eq!(loaded.trackpad_mode, Some("mouse".into()));
         assert_eq!(loaded.mouse_accel, Some(false));
         assert_eq!(loaded.verbose_events, Some(true));
 
         let _ = fs::remove_file(&tmp_file);
         let _ = fs::remove_dir(&tmp_dir);
+    }
+
+    #[test]
+    fn test_parse_json_idle_mode() {
+        let json = r#"{ "trackpad_mode": "idle", "mouse_speed": 1.2 }"#;
+        let s = UserSettings::from_json(json);
+        assert_eq!(s.trackpad_mode, Some("idle".into()));
+        assert_eq!(s.mouse_mode, Some(false));
     }
 }

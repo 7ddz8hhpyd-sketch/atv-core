@@ -214,11 +214,111 @@
       background: rgba(93, 169, 255, 0.15);
       color: var(--blue);
       font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .mode-badge.direction {
+      background: rgba(93, 169, 255, 0.15);
+      color: var(--blue);
     }
     .mode-badge.mouse {
       background: rgba(112, 241, 220, 0.15);
       color: var(--cyan);
     }
+    .mode-badge.idle {
+      background: rgba(255, 179, 71, 0.18);
+      color: var(--amber);
+      border: 1px solid rgba(255, 179, 71, 0.35);
+    }
+    .tp-value.highlight-idle {
+      color: var(--amber);
+      font-weight: 700;
+      text-shadow: 0 0 10px rgba(255, 179, 71, 0.3);
+    }
+
+    /* Radio Group for Running Mode (Single Choice) */
+    .mode-radio-group {
+      display: inline-flex;
+      background: rgba(0, 0, 0, 0.28);
+      padding: 3px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+    .mode-radio-card {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 12px;
+      border-radius: 7px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      border: 1px solid transparent;
+      transition: all 0.16s ease;
+      background: transparent;
+    }
+    .mode-radio-card input[type="radio"] {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--muted);
+      display: grid;
+      place-content: center;
+      cursor: pointer;
+      transition: all 0.16s ease;
+    }
+    .mode-radio-card input[type="radio"]::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      transform: scale(0);
+      transition: 0.12s transform ease-in-out;
+      background: #090b10;
+    }
+    .mode-radio-card:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .mode-radio-card.active-direction {
+      background: rgba(93, 169, 255, 0.18);
+      color: var(--blue);
+      border-color: rgba(93, 169, 255, 0.45);
+    }
+    .mode-radio-card.active-direction input[type="radio"] {
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+    .mode-radio-card.active-mouse {
+      background: rgba(112, 241, 220, 0.18);
+      color: var(--cyan);
+      border-color: rgba(112, 241, 220, 0.45);
+    }
+    .mode-radio-card.active-mouse input[type="radio"] {
+      border-color: var(--cyan);
+      background: var(--cyan);
+    }
+    .mode-radio-card.active-idle {
+      background: rgba(255, 179, 71, 0.18);
+      color: var(--amber);
+      border-color: rgba(255, 179, 71, 0.45);
+    }
+    .mode-radio-card.active-idle input[type="radio"] {
+      border-color: var(--amber);
+      background: var(--amber);
+    }
+    .mode-radio-card.active-direction input[type="radio"]::before,
+    .mode-radio-card.active-mouse input[type="radio"]::before,
+    .mode-radio-card.active-idle input[type="radio"]::before {
+      transform: scale(1);
+    }
+
     .mode-buttons { display: flex; gap: 8px; }
     .m-btn {
       background: rgba(255, 255, 255, 0.06);
@@ -482,6 +582,10 @@
           <span id="refreshIcon" class="refresh-icon">🔄</span>
           <span id="refreshBtnText">刷新状态</span>
         </button>
+        <a href="http://127.0.0.1:8766/" class="refresh-btn" style="text-decoration: none;" title="打开 Swift 托管的系统运行日志与诊断面板 (8766)">
+          <span>🛠️</span>
+          <span>系统日志 (Swift Web)</span>
+        </a>
       </div>
     </header>
 
@@ -508,11 +612,23 @@
       <div style="padding: 18px 20px; display: grid; gap: 16px;">
         <!-- 第一行：模式切换与动力学曲线开关 -->
         <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 13px; font-weight: 600; color: var(--text);">运行模式:</span>
-            <button id="btnModeDirection" class="m-btn" onclick="setMode(false)">◀▲▼▶ 方向键 (上下左右)</button>
-            <button id="btnModeMouse" class="m-btn active" onclick="setMode(true)">🖱️ 鼠标光标 (Mouse)</button>
-            <button class="m-btn" onclick="toggleMode()">🔄 快捷切换</button>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="font-size: 13px; font-weight: 600; color: var(--text);">运行模式 (单选):</span>
+            <div class="mode-radio-group" role="radiogroup" aria-label="触控板运行模式单选">
+              <label class="mode-radio-card" id="labelModeDirection" onclick="setMode('direction')" title="方向键模式：滑动模拟上下左右按键，轻点模拟回车确认">
+                <input type="radio" name="runMode" id="radioModeDirection" value="direction">
+                <span>◀▲▼▶ 方向键</span>
+              </label>
+              <label class="mode-radio-card active-mouse" id="labelModeMouse" onclick="setMode('mouse')" title="鼠标光标模式：触控滑动平滑移动 macOS 鼠标光标，轻点模拟鼠标左键点击">
+                <input type="radio" name="runMode" id="radioModeMouse" value="mouse" checked>
+                <span>🖱️ 鼠标光标</span>
+              </label>
+              <label class="mode-radio-card" id="labelModeIdle" onclick="setMode('idle')" title="空置模式：仅在右侧画布实时预览触控轨迹，不触发任何按键或鼠标移动操作">
+                <input type="radio" name="runMode" id="radioModeIdle" value="idle">
+                <span>👁️ 触控板空置 (仅轨迹预览)</span>
+              </label>
+            </div>
+            <button class="m-btn" style="padding: 6px 12px; font-size: 12px;" onclick="cycleMode()" title="在三个单选模式间顺序循环切换">🔄 轮换</button>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 13px; font-weight: 600; color: var(--text);">动力学算法:</span>
@@ -660,6 +776,7 @@
             <div style="display: flex; align-items: center; gap: 8px;">
               <h2>触控轨迹实时预览</h2>
               <span id="phase" class="pill">idle</span>
+              <span id="idlePill" class="pill" style="display: none; color: var(--amber); border-color: rgba(255, 179, 71, 0.45); background: rgba(255, 179, 71, 0.12); font-weight: 600;">👁️ 空置预览中</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <span id="strokeCount" class="pill" style="font-size: 11px;">0 点</span>
@@ -822,7 +939,7 @@
     }
 
     // ===== 触控板独立设置、驱动调速与状态记录管理 =====
-    let curMode = true; // 默认鼠标模式
+    let curMode = 'mouse'; // 'mouse' | 'direction' | 'idle'
     let curSpeed = 0.5;
     let curAccel = true;
     let curVerbose = false;
@@ -847,9 +964,20 @@
       return "极速跨屏大屏";
     }
 
+    function normalizeMode(m) {
+      if (m === 'idle' || m === 'preview') return 'idle';
+      if (m === 'direction' || m === false) return 'direction';
+      if (m === 'mouse' || m === true) return 'mouse';
+      return 'mouse';
+    }
+
     function updateTouchpadUI(settings) {
       if (!settings) return;
-      if (typeof settings.mouse_mode === 'boolean') curMode = settings.mouse_mode;
+      if (settings.mode !== undefined && settings.mode !== null) {
+        curMode = normalizeMode(settings.mode);
+      } else if (typeof settings.mouse_mode === 'boolean') {
+        curMode = settings.mouse_mode ? 'mouse' : 'direction';
+      }
       if (typeof settings.speed === 'number') curSpeed = settings.speed;
       if (typeof settings.accel === 'boolean') curAccel = settings.accel;
       if (typeof settings.verbose_events === 'boolean') curVerbose = settings.verbose_events;
@@ -857,20 +985,42 @@
       // 顶部卡片 Badge 状态更新
       const cardBadge = $('cardModeBadge');
       if (cardBadge) {
-        cardBadge.textContent = curMode ? '🖱️ 鼠标光标模式' : '◀▲▼▶ 方向键模式';
-        cardBadge.className = 'mode-badge ' + (curMode ? 'mouse' : 'direction');
+        if (curMode === 'idle') {
+          cardBadge.textContent = '👁️ 触控板空置模式 (仅看轨迹)';
+          cardBadge.className = 'mode-badge idle';
+        } else if (curMode === 'mouse') {
+          cardBadge.textContent = '🖱️ 鼠标光标模式';
+          cardBadge.className = 'mode-badge mouse';
+        } else {
+          cardBadge.textContent = '◀▲▼▶ 方向键模式';
+          cardBadge.className = 'mode-badge direction';
+        }
+      }
+
+      // 画布上方的空置提示胶囊标签
+      const idlePill = $('idlePill');
+      if (idlePill) {
+        idlePill.style.display = (curMode === 'idle') ? 'inline-flex' : 'none';
       }
 
       const speedDisp = $('speedDisplay');
       if (speedDisp) speedDisp.textContent = formatSpeedDesc(curSpeed);
 
-      // 运行模式按钮切换
-      const btnDir = $('btnModeDirection');
-      const btnMouse = $('btnModeMouse');
-      if (btnDir && btnMouse) {
-        btnDir.classList.toggle('active', !curMode);
-        btnMouse.classList.toggle('active', curMode);
-      }
+      // 单选 radio 及卡片高亮状态同步
+      const rDir = $('radioModeDirection');
+      const rMouse = $('radioModeMouse');
+      const rIdle = $('radioModeIdle');
+      const lDir = $('labelModeDirection');
+      const lMouse = $('labelModeMouse');
+      const lIdle = $('labelModeIdle');
+
+      if (rDir) rDir.checked = (curMode === 'direction');
+      if (rMouse) rMouse.checked = (curMode === 'mouse');
+      if (rIdle) rIdle.checked = (curMode === 'idle');
+
+      if (lDir) lDir.className = 'mode-radio-card' + (curMode === 'direction' ? ' active-direction' : '');
+      if (lMouse) lMouse.className = 'mode-radio-card' + (curMode === 'mouse' ? ' active-mouse' : '');
+      if (lIdle) lIdle.className = 'mode-radio-card' + (curMode === 'idle' ? ' active-idle' : '');
 
       // 动力学曲线按钮状态
       const accelBtn = $('btnAccelToggle');
@@ -906,8 +1056,16 @@
       // 实时配置与运行状态记录表更新
       const recMode = $('recMode');
       if (recMode) {
-        recMode.textContent = curMode ? '🖱️ 鼠标光标模式 (Mouse)' : '◀▲▼▶ 方向键模式 (D-pad)';
-        recMode.className = 'tp-value ' + (curMode ? 'highlight' : '');
+        if (curMode === 'idle') {
+          recMode.textContent = '👁️ 触控板空置模式 (仅看轨迹实时预览，不控制系统)';
+          recMode.className = 'tp-value highlight-idle';
+        } else if (curMode === 'mouse') {
+          recMode.textContent = '🖱️ 鼠标光标模式 (Mouse Pointer)';
+          recMode.className = 'tp-value highlight';
+        } else {
+          recMode.textContent = '◀▲▼▶ 方向键模式 (D-pad Arrows)';
+          recMode.className = 'tp-value';
+        }
       }
 
       const recSpeed = $('recSpeed');
@@ -922,7 +1080,13 @@
 
       const recSelect = $('recSelect');
       if (recSelect) {
-        recSelect.textContent = curMode ? '模拟鼠标左键单击 (Left Click)' : '回车确认 (Return / Enter)';
+        if (curMode === 'idle') {
+          recSelect.textContent = '空置拦截 (不触发点击或按键)';
+        } else if (curMode === 'mouse') {
+          recSelect.textContent = '模拟鼠标左键单击 (Left Click)';
+        } else {
+          recSelect.textContent = '回车确认 (Return / Enter)';
+        }
       }
 
       const recVerbose = $('recVerbose');
@@ -945,8 +1109,10 @@
 
     async function sendTouchpadSettings(opts) {
       try {
+        const targetMode = opts.mode !== undefined ? normalizeMode(opts.mode) : curMode;
         const payload = {
-          mouse_mode: opts.mouse_mode !== undefined ? opts.mouse_mode : curMode,
+          mode: targetMode,
+          mouse_mode: targetMode === 'mouse',
           speed: opts.speed !== undefined ? opts.speed : curSpeed,
           accel: opts.accel !== undefined ? opts.accel : curAccel,
           verbose_events: opts.verbose_events !== undefined ? opts.verbose_events : curVerbose,
@@ -963,12 +1129,18 @@
       }
     }
 
-    function setMode(isMouse) {
-      sendTouchpadSettings({ mouse_mode: isMouse });
+    function setMode(mode) {
+      sendTouchpadSettings({ mode });
+    }
+
+    function cycleMode() {
+      const modes = ['direction', 'mouse', 'idle'];
+      const nextIdx = (modes.indexOf(curMode) + 1) % modes.length;
+      sendTouchpadSettings({ mode: modes[nextIdx] });
     }
 
     function toggleMode() {
-      sendTouchpadSettings({ mouse_mode: !curMode });
+      cycleMode();
     }
 
     function toggleAccel() {
@@ -1067,6 +1239,7 @@
         updateClientStatusBadge();
 
         updateTouchpadUI({
+          mode: d.mode,
           mouse_mode: d.mouse_mode,
           speed: d.mouse_speed,
           accel: d.mouse_accel,
@@ -1143,8 +1316,7 @@
           if (packet.event === 'touch') drawTouch(packet.data || {});
           if (packet.event === 'audio_state') showAudioState(packet);
           if (packet.event === 'mode_changed') {
-            const m = packet.data && packet.data.mouse_mode;
-            if (typeof m === 'boolean') updateTouchpadUI({ mouse_mode: m });
+            updateTouchpadUI(packet.data || {});
           }
           if (packet.event === 'touchpad_settings' || packet.event === 'mouse_settings') {
             updateTouchpadUI(packet.data || {});

@@ -3,7 +3,7 @@
 use std::process::exit;
 use std::sync::Arc;
 
-use atv_core::{AtvConfig, AtvDelegate, AtvServer};
+use atv_core::{AtvConfig, AtvDelegate, AtvServer, TrackpadMode};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -34,7 +34,9 @@ fn usage() -> ! {
            --pin <PIN>                    4-digit pairing PIN (default: 1111)\n\
            --ip <IPV4>                    Local IPv4 to advertise (auto-detected if omitted)\n\
            --mouse                        Initial mode: Trackpad mouse (default on macOS)\n\
-           --direction, --dpad            Initial mode: Direction keys (D-pad) (default on other targets)\n\
+           --direction, --dpad            Initial mode: Direction keys (D-pad)\n\
+           --idle, --preview              Initial mode: Trackpad idle (preview trajectory only)\n\
+           --mode <mouse|direction|idle>  Initial trackpad mode\n\
            --speed <FLOAT>                Initial mouse speed multiplier (default: 0.5)\n\
            --verbose-events               Enable verbose terminal logging for buttons and events (default: quiet debug)\n\
            --debug, -d                    Enable debug-level logging for all protocol packets\n\
@@ -114,11 +116,28 @@ fn parse_args() -> CliArgs {
             }
             "--mouse" => {
                 config.mouse_mode = true;
+                config.trackpad_mode = TrackpadMode::Mouse;
                 mouse_mode_explicit = true;
             }
             "--direction" | "--dpad" => {
                 config.mouse_mode = false;
+                config.trackpad_mode = TrackpadMode::Direction;
                 mouse_mode_explicit = true;
+            }
+            "--idle" | "--preview" => {
+                config.mouse_mode = false;
+                config.trackpad_mode = TrackpadMode::Idle;
+                mouse_mode_explicit = true;
+            }
+            "--mode" => {
+                let m = args.next().unwrap_or_else(|| usage());
+                if let Some(tm) = TrackpadMode::from_str_opt(&m) {
+                    config.trackpad_mode = tm;
+                    config.mouse_mode = tm.is_mouse();
+                    mouse_mode_explicit = true;
+                } else {
+                    usage();
+                }
             }
             "--speed" => {
                 let sp: f64 = args
@@ -153,7 +172,19 @@ fn parse_args() -> CliArgs {
         #[cfg(target_os = "macos")]
         if target == Target::Mac {
             let settings = atv_core::UserSettings::load();
-            config.mouse_mode = settings.mouse_mode.unwrap_or(true);
+            let initial_mode = settings
+                .trackpad_mode
+                .as_deref()
+                .and_then(TrackpadMode::from_str_opt)
+                .unwrap_or_else(|| {
+                    if settings.mouse_mode.unwrap_or(true) {
+                        TrackpadMode::Mouse
+                    } else {
+                        TrackpadMode::Direction
+                    }
+                });
+            config.trackpad_mode = initial_mode;
+            config.mouse_mode = initial_mode.is_mouse();
         }
     }
 
@@ -182,7 +213,11 @@ async fn main() {
         "atv_core=info,atv_cli=info"
     };
 
+    use std::io::IsTerminal;
+    let is_terminal = std::io::stdout().is_terminal();
+
     tracing_subscriber::fmt()
+        .with_ansi(is_terminal)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| default_filter.into()),
@@ -190,6 +225,7 @@ async fn main() {
         .init();
 
     let args = parse_args();
+    let trackpad_mode = Arc::new(std::sync::atomic::AtomicU8::new(args.config.trackpad_mode as u8));
     let mouse_mode = Arc::new(std::sync::atomic::AtomicBool::new(args.config.mouse_mode));
     let open_browser = args.open_browser;
 
@@ -233,7 +269,7 @@ async fn main() {
         }
     };
 
-    let server = match AtvServer::start_with_mouse_mode(args.config, delegate.clone(), mouse_mode.clone()).await {
+    let server = match AtvServer::start_with_trackpad_mode(args.config, delegate.clone(), trackpad_mode.clone(), mouse_mode.clone()).await {
         Ok(server) => server,
         Err(e) => {
             eprintln!("failed to start server: {e}");
@@ -248,10 +284,10 @@ async fn main() {
     println!("PIN Code    : {:04}", server.config().pin);
 
     let (init_speed, init_accel, init_verbose) = delegate.get_touchpad_settings();
-    let initial_mode_str = if mouse_mode.load(std::sync::atomic::Ordering::SeqCst) {
-        "🖱️  Mouse Cursor (鼠标光标模式)"
-    } else {
-        "◀▲▼▶ Direction Keys (上下左右模式)"
+    let initial_mode_str = match TrackpadMode::from_u8(trackpad_mode.load(std::sync::atomic::Ordering::SeqCst)) {
+        TrackpadMode::Mouse => "🖱️  Mouse Cursor (鼠标光标模式)",
+        TrackpadMode::Direction => "◀▲▼▶ Direction Keys (上下左右模式)",
+        TrackpadMode::Idle => "👁️  Idle Preview (触控板空置/仅看轨迹实时预览)",
     };
     println!("Input Mode  : {initial_mode_str}");
     println!(
@@ -263,6 +299,7 @@ async fn main() {
     println!("Interactive : 'm' toggle mode, 's <speed>' adjust speed, 'v' toggle verbose events");
 
     // Spawn terminal input listener for dynamic mode, speed, and verbose logging switching
+    let trackpad_mode_terminal = trackpad_mode.clone();
     let mouse_mode_terminal = mouse_mode.clone();
     let delegate_terminal = delegate.clone();
     let inspector_terminal = server.inspector();
@@ -273,18 +310,20 @@ async fn main() {
         while let Ok(Some(line)) = reader.next_line().await {
             let trimmed = line.trim();
             if trimmed.eq_ignore_ascii_case("m") || trimmed.eq_ignore_ascii_case("mode") {
-                let current = mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst);
-                let new_mode = !current;
-                mouse_mode_terminal.store(new_mode, std::sync::atomic::Ordering::SeqCst);
-                delegate_terminal.on_mode_changed(new_mode);
+                let current_mode = TrackpadMode::from_u8(trackpad_mode_terminal.load(std::sync::atomic::Ordering::SeqCst));
+                let new_mode = current_mode.next();
+                trackpad_mode_terminal.store(new_mode as u8, std::sync::atomic::Ordering::SeqCst);
+                mouse_mode_terminal.store(new_mode.is_mouse(), std::sync::atomic::Ordering::SeqCst);
+                delegate_terminal.on_trackpad_mode_changed(new_mode);
                 inspector_terminal.emit(
                     "mode_changed",
-                    &format!("{{\"mouse_mode\":{}}}", new_mode),
+                    &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", new_mode.as_str(), new_mode.is_mouse()),
                 );
-                let desc = if new_mode {
-                    "🖱️  Mouse Cursor (鼠标光标模式)"
-                } else {
-                    "◀▲▼▶ Direction Keys (上下左右模式)"
+                atv_core::UserSettings::update_trackpad_mode(new_mode.as_str());
+                let desc = match new_mode {
+                    TrackpadMode::Mouse => "🖱️  Mouse Cursor (鼠标光标模式)",
+                    TrackpadMode::Direction => "◀▲▼▶ Direction Keys (上下左右模式)",
+                    TrackpadMode::Idle => "👁️  Idle / Preview Only (触控板空置/仅看轨迹实时预览)",
                 };
                 println!("\n🔄 [模式切换] 当前已切换为: {desc}\n");
             } else if trimmed.starts_with("s ") || trimmed.starts_with("speed ") {
@@ -293,11 +332,13 @@ async fn main() {
                     let (_, accel, verbose) = delegate_terminal.get_touchpad_settings();
                     let new_speed = val.clamp(0.1, 10.0);
                     delegate_terminal.on_touchpad_settings_changed(new_speed, accel, verbose);
+                    let cur_mode = TrackpadMode::from_u8(trackpad_mode_terminal.load(std::sync::atomic::Ordering::SeqCst));
                     inspector_terminal.emit(
                         "touchpad_settings",
                         &format!(
-                            "{{\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{accel},\"verbose_events\":{verbose}}}",
-                            mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst)
+                            "{{\"mode\":\"{}\",\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{accel},\"verbose_events\":{verbose}}}",
+                            cur_mode.as_str(),
+                            cur_mode.is_mouse()
                         ),
                     );
                     println!("\n⚡ [驱动灵敏度] 鼠标速度已调整为: {new_speed:.2}x\n");
@@ -308,11 +349,13 @@ async fn main() {
                 let (speed, accel, cur_verbose) = delegate_terminal.get_touchpad_settings();
                 let new_verbose = !cur_verbose;
                 delegate_terminal.on_touchpad_settings_changed(speed, accel, new_verbose);
+                let cur_mode = TrackpadMode::from_u8(trackpad_mode_terminal.load(std::sync::atomic::Ordering::SeqCst));
                 inspector_terminal.emit(
                     "touchpad_settings",
                     &format!(
-                        "{{\"mouse_mode\":{},\"speed\":{speed:.2},\"accel\":{accel},\"verbose_events\":{new_verbose}}}",
-                        mouse_mode_terminal.load(std::sync::atomic::Ordering::SeqCst)
+                        "{{\"mode\":\"{}\",\"mouse_mode\":{},\"speed\":{speed:.2},\"accel\":{accel},\"verbose_events\":{new_verbose}}}",
+                        cur_mode.as_str(),
+                        cur_mode.is_mouse()
                     ),
                 );
                 let desc = if new_verbose { "开启 (Info 级别)" } else { "静默 (Debug 级别)" };

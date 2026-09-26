@@ -6,7 +6,7 @@
 //! answering HTTP "OK".
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 
 use sha2::{Digest, Sha256};
 
-use crate::delegate::{AtvDelegate, EventKind};
+use crate::delegate::{AtvDelegate, EventKind, TrackpadMode};
 use crate::error::{Error, Result};
 use crate::identity::{self, DeviceIdentity};
 use crate::inspector::InspectorHub;
@@ -57,8 +57,10 @@ pub struct AtvConfig {
     pub pin: u32,
     /// LAN IPv4 address to advertise; auto-detected when None.
     pub ip: Option<Ipv4Addr>,
-    /// Trackpad mode: touch drives pointer deltas instead of direction keys.
+    /// Trackpad mode: touch drives pointer deltas instead of direction keys (legacy boolean).
     pub mouse_mode: bool,
+    /// Operating mode: Direction, Mouse, or Idle (preview only).
+    pub trackpad_mode: TrackpadMode,
     /// Port for Debug Web UI & Inspector (None to disable, default Some(8765)).
     pub ui_port: Option<u16>,
     /// Initial mouse speed multiplier (default 0.5).
@@ -75,11 +77,23 @@ impl Default for AtvConfig {
     fn default() -> Self {
         let identity = DeviceIdentity::detect();
         let settings = crate::settings::UserSettings::load();
+        let initial_mode = settings
+            .trackpad_mode
+            .as_deref()
+            .and_then(TrackpadMode::from_str_opt)
+            .unwrap_or_else(|| {
+                if settings.mouse_mode.unwrap_or(false) {
+                    TrackpadMode::Mouse
+                } else {
+                    TrackpadMode::Direction
+                }
+            });
         Self {
             name: identity.name,
             pin: 1111,
             ip: None,
-            mouse_mode: settings.mouse_mode.unwrap_or(false),
+            mouse_mode: initial_mode.is_mouse(),
+            trackpad_mode: initial_mode,
             ui_port: Some(8765),
             mouse_speed: settings.mouse_speed,
             device_id: Some(identity.device_id),
@@ -100,6 +114,7 @@ pub struct AtvServer {
     ui_port: Option<u16>,
     inspector: Arc<InspectorHub>,
     mouse_mode: Arc<AtomicBool>,
+    trackpad_mode: Arc<AtomicU8>,
     delegate: Arc<dyn AtvDelegate>,
     shutdown_tx: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
@@ -114,14 +129,31 @@ pub struct AtvServer {
 impl AtvServer {
     /// Start listeners and advertise the three Bonjour services.
     pub async fn start(config: AtvConfig, delegate: Arc<dyn AtvDelegate>) -> Result<Self> {
-        let mouse_mode = Arc::new(AtomicBool::new(config.mouse_mode));
-        Self::start_with_mouse_mode(config, delegate, mouse_mode).await
+        let trackpad_mode = Arc::new(AtomicU8::new(config.trackpad_mode as u8));
+        let mouse_mode = Arc::new(AtomicBool::new(config.trackpad_mode.is_mouse()));
+        Self::start_with_trackpad_mode(config, delegate, trackpad_mode, mouse_mode).await
     }
 
-    /// Start listeners with a shared atomic mouse_mode boolean for live mode switching.
+    /// Start listeners with a shared atomic mouse_mode boolean for live mode switching (legacy helper).
     pub async fn start_with_mouse_mode(
         config: AtvConfig,
         delegate: Arc<dyn AtvDelegate>,
+        mouse_mode: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        let initial_u8 = if mouse_mode.load(Ordering::SeqCst) {
+            TrackpadMode::Mouse as u8
+        } else {
+            config.trackpad_mode as u8
+        };
+        let trackpad_mode = Arc::new(AtomicU8::new(initial_u8));
+        Self::start_with_trackpad_mode(config, delegate, trackpad_mode, mouse_mode).await
+    }
+
+    /// Start listeners with shared atomic mode trackers.
+    pub async fn start_with_trackpad_mode(
+        config: AtvConfig,
+        delegate: Arc<dyn AtvDelegate>,
+        trackpad_mode: Arc<AtomicU8>,
         mouse_mode: Arc<AtomicBool>,
     ) -> Result<Self> {
         if config.pin > 9999 {
@@ -163,6 +195,7 @@ impl AtvServer {
             config.pin,
             delegate.clone(),
             inspector.clone(),
+            trackpad_mode.clone(),
             mouse_mode.clone(),
             shutdown_rx.clone(),
         )));
@@ -176,6 +209,7 @@ impl AtvServer {
                         ui_listener,
                         inspector.clone(),
                         delegate.clone(),
+                        trackpad_mode.clone(),
                         mouse_mode.clone(),
                         identity.name.clone(),
                         shutdown_rx.clone(),
@@ -341,6 +375,7 @@ impl AtvServer {
             ui_port: actual_ui_port,
             inspector,
             mouse_mode,
+            trackpad_mode,
             delegate,
             shutdown_tx,
             tasks,
@@ -386,6 +421,32 @@ impl AtvServer {
         self.inspector.clone()
     }
 
+    pub fn trackpad_mode_arc(&self) -> Arc<AtomicU8> {
+        self.trackpad_mode.clone()
+    }
+
+    pub fn trackpad_mode(&self) -> TrackpadMode {
+        TrackpadMode::from_u8(self.trackpad_mode.load(Ordering::SeqCst))
+    }
+
+    pub fn set_trackpad_mode(&self, mode: TrackpadMode) {
+        self.trackpad_mode.store(mode as u8, Ordering::SeqCst);
+        self.mouse_mode.store(mode.is_mouse(), Ordering::SeqCst);
+        self.delegate.on_trackpad_mode_changed(mode);
+        self.inspector.emit(
+            "mode_changed",
+            &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", mode.as_str(), mode.is_mouse()),
+        );
+        crate::settings::UserSettings::update_trackpad_mode(mode.as_str());
+    }
+
+    pub fn cycle_trackpad_mode(&self) -> TrackpadMode {
+        let current = self.trackpad_mode();
+        let new_mode = current.next();
+        self.set_trackpad_mode(new_mode);
+        new_mode
+    }
+
     pub fn mouse_mode_arc(&self) -> Arc<AtomicBool> {
         self.mouse_mode.clone()
     }
@@ -394,20 +455,17 @@ impl AtvServer {
         self.mouse_mode.load(Ordering::SeqCst)
     }
 
+    pub fn is_idle_mode(&self) -> bool {
+        self.trackpad_mode.load(Ordering::SeqCst) == TrackpadMode::Idle as u8
+    }
+
     pub fn set_mouse_mode(&self, enabled: bool) {
-        self.mouse_mode.store(enabled, Ordering::SeqCst);
-        self.delegate.on_mode_changed(enabled);
-        self.inspector.emit(
-            "mode_changed",
-            &format!("{{\"mouse_mode\":{}}}", enabled),
-        );
+        self.set_trackpad_mode(if enabled { TrackpadMode::Mouse } else { TrackpadMode::Direction });
     }
 
     pub fn toggle_mouse_mode(&self) -> bool {
-        let current = self.is_mouse_mode();
-        let new_mode = !current;
-        self.set_mouse_mode(new_mode);
-        new_mode
+        let new_mode = self.cycle_trackpad_mode();
+        new_mode.is_mouse()
     }
 
     /// Unregister Bonjour services and stop all listeners.
@@ -490,6 +548,7 @@ async fn companion_loop(
     pin: u32,
     delegate: Arc<dyn AtvDelegate>,
     inspector: Arc<InspectorHub>,
+    trackpad_mode: Arc<AtomicU8>,
     mouse_mode: Arc<AtomicBool>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -510,13 +569,14 @@ async fn companion_loop(
         let identity = identity.clone();
         let delegate = delegate.clone();
         let inspector = inspector.clone();
+        let trackpad_mode = trackpad_mode.clone();
         let mouse_mode = mouse_mode.clone();
         let registry = registry.clone();
         let active_tracker = active_tracker.clone();
         let mut client_shutdown = shutdown.clone();
         tokio::spawn(async move {
             tokio::select! {
-                _ = handle_companion(stream, identity, pin, delegate, inspector, mouse_mode, registry, active_tracker) => {},
+                _ = handle_companion(stream, identity, pin, delegate, inspector, trackpad_mode, mouse_mode, registry, active_tracker) => {},
                 _ = client_shutdown.changed() => {},
             }
         });
@@ -529,6 +589,7 @@ async fn handle_companion(
     pin: u32,
     delegate: Arc<dyn AtvDelegate>,
     inspector: Arc<InspectorHub>,
+    trackpad_mode: Arc<AtomicU8>,
     mouse_mode: Arc<AtomicBool>,
     registry: Arc<Mutex<DeviceRegistry>>,
     active_tracker: Arc<Mutex<ActiveConnectionTracker>>,
@@ -561,6 +622,7 @@ async fn handle_companion(
         &identity,
         pin,
         mouse_mode,
+        trackpad_mode,
         inspector.clone(),
         registry,
         active_tracker.clone(),
@@ -657,6 +719,7 @@ async fn ui_loop(
     listener: TcpListener,
     inspector: Arc<InspectorHub>,
     delegate: Arc<dyn AtvDelegate>,
+    trackpad_mode: Arc<AtomicU8>,
     mouse_mode: Arc<AtomicBool>,
     device_name: String,
     mut shutdown: watch::Receiver<bool>,
@@ -674,9 +737,10 @@ async fn ui_loop(
         };
         let inspector = inspector.clone();
         let delegate = delegate.clone();
+        let trackpad_mode = trackpad_mode.clone();
         let mouse_mode = mouse_mode.clone();
         let device_name = device_name.clone();
-        tokio::spawn(handle_ui_client(stream, inspector, delegate, mouse_mode, device_name));
+        tokio::spawn(handle_ui_client(stream, inspector, delegate, trackpad_mode, mouse_mode, device_name));
     }
 }
 
@@ -684,6 +748,7 @@ async fn handle_ui_client(
     mut stream: TcpStream,
     inspector: Arc<InspectorHub>,
     delegate: Arc<dyn AtvDelegate>,
+    trackpad_mode: Arc<AtomicU8>,
     mouse_mode: Arc<AtomicBool>,
     device_name: String,
 ) {
@@ -718,6 +783,10 @@ async fn handle_ui_client(
             let _ = stream.write_all(header.as_bytes()).await;
             let _ = stream.write_all(body).await;
             let _ = stream.flush().await;
+        }
+        ("GET", "/debug") | ("GET", "/debug/") | ("GET", "/logs") => {
+            let resp = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:8766/\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp.as_bytes()).await;
         }
         ("GET", "/events") => {
             let header = "HTTP/1.1 200 OK\r\n\
@@ -776,13 +845,20 @@ async fn handle_ui_client(
                 let body = &req[pos + 4..];
                 if let Some(button) = extract_button_from_json(body) {
                     if button == "toggle_mode" {
-                        let new_mode = !mouse_mode.load(Ordering::SeqCst);
-                        mouse_mode.store(new_mode, Ordering::SeqCst);
-                        delegate.on_mode_changed(new_mode);
-                        inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
+                        let cur_mode = TrackpadMode::from_u8(trackpad_mode.load(Ordering::SeqCst));
+                        let new_mode = cur_mode.next();
+                        trackpad_mode.store(new_mode as u8, Ordering::SeqCst);
+                        mouse_mode.store(new_mode.is_mouse(), Ordering::SeqCst);
+                        delegate.on_trackpad_mode_changed(new_mode);
+                        inspector.emit(
+                            "mode_changed",
+                            &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", new_mode.as_str(), new_mode.is_mouse()),
+                        );
+                        crate::settings::UserSettings::update_trackpad_mode(new_mode.as_str());
                         let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
-                            new_mode
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mode\":\"{}\",\"mouse_mode\":{}}}",
+                            new_mode.as_str(),
+                            new_mode.is_mouse()
                         );
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;
@@ -800,20 +876,28 @@ async fn handle_ui_client(
         ("POST", "/api/mode") => {
             if let Some(pos) = req.find("\r\n\r\n") {
                 let body = &req[pos + 4..];
-                let new_mode = if body.contains("\"mouse\"") || body.contains("true") {
-                    true
+                let cur_mode = TrackpadMode::from_u8(trackpad_mode.load(Ordering::SeqCst));
+                let new_mode = if body.contains("\"idle\"") || body.contains("\"preview\"") {
+                    TrackpadMode::Idle
+                } else if body.contains("\"mouse\"") || body.contains("true") {
+                    TrackpadMode::Mouse
                 } else if body.contains("\"direction\"") || body.contains("false") {
-                    false
+                    TrackpadMode::Direction
                 } else {
-                    !mouse_mode.load(Ordering::SeqCst)
+                    cur_mode.next()
                 };
-                mouse_mode.store(new_mode, Ordering::SeqCst);
-                delegate.on_mode_changed(new_mode);
-                inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
-                crate::settings::UserSettings::update_mouse_mode(new_mode);
+                trackpad_mode.store(new_mode as u8, Ordering::SeqCst);
+                mouse_mode.store(new_mode.is_mouse(), Ordering::SeqCst);
+                delegate.on_trackpad_mode_changed(new_mode);
+                inspector.emit(
+                    "mode_changed",
+                    &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", new_mode.as_str(), new_mode.is_mouse()),
+                );
+                crate::settings::UserSettings::update_trackpad_mode(new_mode.as_str());
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
-                    new_mode
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mode\":\"{}\",\"mouse_mode\":{}}}",
+                    new_mode.as_str(),
+                    new_mode.is_mouse()
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 return;
@@ -822,14 +906,20 @@ async fn handle_ui_client(
             let _ = stream.write_all(resp.as_bytes()).await;
         }
         ("POST", "/api/toggle_mode") => {
-            let new_mode = !mouse_mode.load(Ordering::SeqCst);
-            mouse_mode.store(new_mode, Ordering::SeqCst);
-            delegate.on_mode_changed(new_mode);
-            inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
-            crate::settings::UserSettings::update_mouse_mode(new_mode);
+            let cur_mode = TrackpadMode::from_u8(trackpad_mode.load(Ordering::SeqCst));
+            let new_mode = cur_mode.next();
+            trackpad_mode.store(new_mode as u8, Ordering::SeqCst);
+            mouse_mode.store(new_mode.is_mouse(), Ordering::SeqCst);
+            delegate.on_trackpad_mode_changed(new_mode);
+            inspector.emit(
+                "mode_changed",
+                &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", new_mode.as_str(), new_mode.is_mouse()),
+            );
+            crate::settings::UserSettings::update_trackpad_mode(new_mode.as_str());
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{}}}",
-                new_mode
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mode\":\"{}\",\"mouse_mode\":{}}}",
+                new_mode.as_str(),
+                new_mode.is_mouse()
             );
             let _ = stream.write_all(resp.as_bytes()).await;
             return;
@@ -846,33 +936,51 @@ async fn handle_ui_client(
                     .or_else(|| extract_bool_from_json(body, "verbose"))
                     .unwrap_or(cur_verbose);
 
-                let mut new_mode_opt = None;
-                if let Some(new_mode) = extract_bool_from_json(body, "mouse_mode")
-                    .or_else(|| extract_bool_from_json(body, "mode"))
+                let mut cur_mode = TrackpadMode::from_u8(trackpad_mode.load(Ordering::SeqCst));
+                if let Some(m_str) = extract_string_from_json(body, "mode")
+                    .or_else(|| extract_string_from_json(body, "trackpad_mode"))
                 {
-                    mouse_mode.store(new_mode, Ordering::SeqCst);
-                    delegate.on_mode_changed(new_mode);
-                    inspector.emit("mode_changed", &format!("{{\"mouse_mode\":{}}}", new_mode));
-                    new_mode_opt = Some(new_mode);
+                    if let Some(m) = TrackpadMode::from_str_opt(&m_str) {
+                        cur_mode = m;
+                        trackpad_mode.store(m as u8, Ordering::SeqCst);
+                        mouse_mode.store(m.is_mouse(), Ordering::SeqCst);
+                        delegate.on_trackpad_mode_changed(m);
+                        inspector.emit(
+                            "mode_changed",
+                            &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", m.as_str(), m.is_mouse()),
+                        );
+                    }
+                } else if let Some(new_mouse) = extract_bool_from_json(body, "mouse_mode") {
+                    let m = if new_mouse { TrackpadMode::Mouse } else { TrackpadMode::Direction };
+                    cur_mode = m;
+                    trackpad_mode.store(m as u8, Ordering::SeqCst);
+                    mouse_mode.store(m.is_mouse(), Ordering::SeqCst);
+                    delegate.on_trackpad_mode_changed(m);
+                    inspector.emit(
+                        "mode_changed",
+                        &format!("{{\"mode\":\"{}\",\"mouse_mode\":{}}}", m.as_str(), m.is_mouse()),
+                    );
                 }
 
                 delegate.on_touchpad_settings_changed(new_speed, new_accel, new_verbose);
-                crate::settings::UserSettings::update_all(
+                crate::settings::UserSettings::update_all_with_mode(
                     new_speed,
                     new_accel,
                     new_verbose,
-                    new_mode_opt.or_else(|| Some(mouse_mode.load(Ordering::SeqCst))),
+                    Some(cur_mode.as_str()),
+                    Some(cur_mode.is_mouse()),
                 );
                 inspector.emit(
                     "touchpad_settings",
                     &format!(
-                        "{{\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{new_accel},\"verbose_events\":{new_verbose}}}",
-                        mouse_mode.load(Ordering::SeqCst)
+                        "{{\"mode\":\"{}\",\"mouse_mode\":{},\"speed\":{new_speed:.2},\"accel\":{new_accel},\"verbose_events\":{new_verbose}}}",
+                        cur_mode.as_str(),
+                        cur_mode.is_mouse()
                     ),
                 );
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mouse_mode\":{},\"speed\":{:.2},\"accel\":{},\"verbose_events\":{}}}",
-                    mouse_mode.load(Ordering::SeqCst), new_speed, new_accel, new_verbose
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"mode\":\"{}\",\"mouse_mode\":{},\"speed\":{:.2},\"accel\":{},\"verbose_events\":{}}}",
+                    cur_mode.as_str(), cur_mode.is_mouse(), new_speed, new_accel, new_verbose
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 return;
@@ -881,7 +989,8 @@ async fn handle_ui_client(
             let _ = stream.write_all(resp.as_bytes()).await;
         }
         ("GET", "/api/status") | ("GET", "/api/mode") => {
-            let is_mouse = mouse_mode.load(Ordering::SeqCst);
+            let cur_mode = TrackpadMode::from_u8(trackpad_mode.load(Ordering::SeqCst));
+            let is_mouse = cur_mode.is_mouse();
             let (speed, accel, verbose_events) = delegate.get_touchpad_settings();
             let screen_json = match delegate.get_screen_size() {
                 Some((w, h)) => format!("[{},{}]", w.round() as u32, h.round() as u32),
@@ -897,8 +1006,8 @@ async fn handle_ui_client(
                 None => "null".to_string(),
             };
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"server_online\":true,\"mouse_mode\":{},\"device_name\":\"{}\",\"mouse_speed\":{:.2},\"mouse_accel\":{},\"verbose_events\":{},\"screen_size\":{},\"client_connected\":{},\"client_peer\":{},\"session_ready\":{},\"audio\":{}}}",
-                is_mouse, device_name, speed, accel, verbose_events, screen_json, client_conn, peer_json, session_ready, audio_json
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{{\"status\":\"ok\",\"server_online\":true,\"mode\":\"{}\",\"mouse_mode\":{},\"device_name\":\"{}\",\"mouse_speed\":{:.2},\"mouse_accel\":{},\"verbose_events\":{},\"screen_size\":{},\"client_connected\":{},\"client_peer\":{},\"session_ready\":{},\"audio\":{}}}",
+                cur_mode.as_str(), is_mouse, device_name, speed, accel, verbose_events, screen_json, client_conn, peer_json, session_ready, audio_json
             );
             let _ = stream.write_all(resp.as_bytes()).await;
             return;
@@ -912,6 +1021,20 @@ async fn handle_ui_client(
             let _ = stream.write_all(resp.as_bytes()).await;
         }
     }
+}
+
+fn extract_string_from_json(json: &str, key: &str) -> Option<String> {
+    let quoted = format!("\"{key}\"");
+    let idx = json.find(&quoted)?;
+    let rest = &json[idx + quoted.len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 fn extract_button_from_json(json: &str) -> Option<String> {
@@ -1039,3 +1162,4 @@ fn peer_string(stream: &TcpStream) -> String {
         .map(|a: SocketAddr| a.to_string())
         .unwrap_or_else(|_| "?".into())
 }
+

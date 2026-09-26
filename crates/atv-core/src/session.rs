@@ -1,7 +1,7 @@
 //! Companion Link session: pairing, verification and the encrypted control
 //! channel. Ported from `fake_atv.py`'s `CompanionSession`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use ed25519_dalek::{Signer, SigningKey};
@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::crypto::{hkdf_expand, CompanionCipher};
-use crate::delegate::{AtvDelegate, EventKind, TouchPhase};
+use crate::delegate::{AtvDelegate, EventKind, TouchPhase, TrackpadMode};
 use crate::error::{Error, Result};
 use crate::identity::DeviceIdentity;
 use crate::inspector::InspectorHub;
@@ -72,7 +72,8 @@ pub struct CompanionSession {
     device_name: String,
     device_mac: [u8; 6],
     pin: u32,
-    mouse_mode: Arc<AtomicBool>,
+    _mouse_mode: Arc<AtomicBool>,
+    trackpad_mode: Arc<AtomicU8>,
     unique_id: Vec<u8>,
     private_key: [u8; 32],
     signing_key: SigningKey,
@@ -107,6 +108,7 @@ impl CompanionSession {
         identity: &DeviceIdentity,
         pin: u32,
         mouse_mode: Arc<AtomicBool>,
+        trackpad_mode: Arc<AtomicU8>,
         inspector: Arc<InspectorHub>,
         registry: Arc<Mutex<DeviceRegistry>>,
         active_tracker: Arc<Mutex<ActiveConnectionTracker>>,
@@ -126,7 +128,8 @@ impl CompanionSession {
             device_name: identity.name.clone(),
             device_mac: identity.mac_bytes,
             pin,
-            mouse_mode,
+            _mouse_mode: mouse_mode,
+            trackpad_mode,
             unique_id: identity.server_identifier.as_bytes().to_vec(),
             private_key: identity.private_key,
             signing_key,
@@ -945,13 +948,15 @@ impl CompanionSession {
         self.send_response(xid, Some(response), 0).await
     }
 
-    /// Translate touchpad gestures into directional button presses (default)
-    /// or pointer-style deltas (mouse mode). Ported from
-    /// `fake_atv._handle_touch`.
+    /// Translate touchpad gestures into directional button presses (direction mode),
+    /// pointer-style deltas (mouse mode), or trajectory preview only (idle mode).
     fn handle_touch(&mut self, content: &Value) {
         let phase = content.get("_tPh").and_then(Value::as_int).unwrap_or(0);
         let x = content.get("_cx").and_then(Value::as_float);
         let y = content.get("_cy").and_then(Value::as_float);
+
+        let mode_u8 = self.trackpad_mode.load(Ordering::SeqCst);
+        let mode = TrackpadMode::from_u8(mode_u8);
 
         if phase == 1 {
             // touch began
@@ -959,7 +964,9 @@ impl CompanionSession {
                 self.touch_origin = Some((x, y));
                 self.touch_last = Some((x, y));
                 self.touch_moved = false;
-                self.delegate.on_touch(0.0, 0.0, TouchPhase::Began);
+                if mode == TrackpadMode::Mouse {
+                    self.delegate.on_touch(0.0, 0.0, TouchPhase::Began);
+                }
                 self.inspector.emit("touch", "{\"phase\":1,\"dx\":0.0,\"dy\":0.0}");
             }
             return;
@@ -969,29 +976,21 @@ impl CompanionSession {
         };
         let position = (x, y);
 
-        let is_mouse = self.mouse_mode.load(Ordering::SeqCst);
         if phase != 4 {
             // intermediate move
-            if is_mouse {
-                if let Some(last) = self.touch_last {
-                    let dx = position.0 - last.0;
-                    let dy = position.1 - last.1;
-                    if dx != 0.0 || dy != 0.0 {
-                        self.touch_moved = true;
-                        self.delegate.on_touch(dx, dy, TouchPhase::Moved);
-                        self.inspector.emit(
-                            "touch",
-                            &format!("{{\"phase\":2,\"dx\":{:.1},\"dy\":{:.1}}}", dx, dy),
-                        );
-                    }
-                }
-            } else if let Some(last) = self.touch_last {
+            if let Some(last) = self.touch_last {
                 let dx = position.0 - last.0;
                 let dy = position.1 - last.1;
-                self.inspector.emit(
-                    "touch",
-                    &format!("{{\"phase\":2,\"dx\":{:.1},\"dy\":{:.1}}}", dx, dy),
-                );
+                if dx != 0.0 || dy != 0.0 {
+                    if mode == TrackpadMode::Mouse {
+                        self.touch_moved = true;
+                        self.delegate.on_touch(dx, dy, TouchPhase::Moved);
+                    }
+                    self.inspector.emit(
+                        "touch",
+                        &format!("{{\"phase\":2,\"dx\":{:.1},\"dy\":{:.1}}}", dx, dy),
+                    );
+                }
             }
             self.touch_last = Some(position);
             return;
@@ -1003,13 +1002,21 @@ impl CompanionSession {
         let dx = position.0 - origin.0;
         let dy = position.1 - origin.1;
         let distance = dx.abs().max(dy.abs());
-        self.delegate.on_touch(dx, dy, TouchPhase::Ended);
+
+        if mode == TrackpadMode::Mouse {
+            self.delegate.on_touch(dx, dy, TouchPhase::Ended);
+        }
         self.inspector.emit(
             "touch",
             &format!("{{\"phase\":4,\"dx\":{:.1},\"dy\":{:.1}}}", dx, dy),
         );
 
-        if is_mouse {
+        // In Idle mode: only emit touch trajectory for real-time preview, do not trigger any actions
+        if mode == TrackpadMode::Idle {
+            return;
+        }
+
+        if mode == TrackpadMode::Mouse {
             if distance < TAP_MAX_DISTANCE {
                 self.delegate.on_event(EventKind::MouseClick, "");
                 self.inspector.emit("button", "{\"name\":\"click\"}");
