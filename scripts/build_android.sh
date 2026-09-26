@@ -56,6 +56,19 @@ fi
 
 echo "Native library copied to: $JNILIBS_DIR/libatv_android.so"
 
+# Locate and run llvm-strip if present to ensure smallest possible .so
+STRIP_BIN=""
+if [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+    STRIP_BIN=$(find "$ANDROID_HOME/ndk" -name "llvm-strip" 2>/dev/null | head -n1 || true)
+fi
+if [ -z "$STRIP_BIN" ] && [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
+    STRIP_BIN=$(find "$ANDROID_NDK_HOME" -name "llvm-strip" 2>/dev/null | head -n1 || true)
+fi
+if [ -n "$STRIP_BIN" ] && [ -x "$STRIP_BIN" ]; then
+    echo "Stripping symbols from $JNILIBS_DIR/libatv_android.so..."
+    "$STRIP_BIN" --strip-all "$JNILIBS_DIR/libatv_android.so" || true
+fi
+
 echo "=== Building Android TV APK ($BUILD_MODE) ==="
 cd "$ROOT_DIR/android-tv"
 

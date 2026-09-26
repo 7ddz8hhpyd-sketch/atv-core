@@ -41,13 +41,16 @@ A high-performance Rust implementation of the Apple TV Companion Link / MRP prot
 
 ```bash
 # 1. 编译并打包为 macOS 应用程序 (build/AppleTVRemote.app)
-./scripts/build_app.sh
+./scripts/build_app.sh           # 默认编译 Apple Silicon (arm64 / M1+)
+./scripts/build_app.sh x86_64    # 编译 Intel (x86_64)
 
-# 2. 编译并打包为磁盘映像安装包 (build/AppleTVRemote.dmg)
-./scripts/build_dmg.sh
+# 2. 编译并打包为磁盘映像安装包
+./scripts/build_dmg.sh           # 默认打包 arm64 (输出 build/AppleTVRemote-arm64.dmg)
+./scripts/build_dmg.sh x86_64    # 打包 x86_64 (输出 build/AppleTVRemote-x86_64.dmg)
+./scripts/build_dmg.sh all       # 同时打包 arm64 与 x86_64 两套 DMG
 ```
 
-生成的 `AppleTVRemote.dmg` 自带 `/Applications` 软链接，直接拖拽即可完成安装：
+生成的 DMG 自带 `/Applications` 软链接，直接拖拽即可完成安装：
 * 启动后常驻 macOS 菜单栏，带原生 Apple TV 遥控器图标与实时状态徽标。
 * 点击菜单栏图标可随时切换「🖱️ 鼠标光标模式」与「◀▲▼▶ 方向键模式」，并可一键调节 0.5x ~ 2.0x 灵敏度预设与动态加速度。
 * 当 iPhone 连接或断开时，系统会自动弹出原生通知横幅提醒。
@@ -56,9 +59,9 @@ A high-performance Rust implementation of the Apple TV Companion Link / MRP prot
 
 **原因 1：架构不匹配（Intel vs Apple Silicon）**
 
-默认 `cargo build --release` 只编译当前机器架构（M 系列 → `arm64`，Intel → `x86_64`）。
-`build_app.sh` 已支持编译 **Universal Binary**（同时包含 arm64 + x86_64），两台 Mac 均可运行。
-如果是直接转移旧版构建产物，请在源机上重新运行 `./scripts/build_app.sh` 再分发。
+GitHub Releases 与构建 Artifacts 现已提供分开打包的 DMG，请按需下载对应架构：
+* **`AppleTVRemote-arm64.dmg`**：适用于 M1 / M2 / M3 / M4 等 Apple Silicon 芯片 Mac。
+* **`AppleTVRemote-x86_64.dmg`**：适用于旧款 Intel 处理器 Mac。
 
 **原因 2：Gatekeeper 拒绝启动（自签名证书不受信任）**
 

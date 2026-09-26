@@ -4,20 +4,54 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+ARCH="${1:-arm64}"
+
+case "$ARCH" in
+    arm64)
+        RUST_TARGET="aarch64-apple-darwin"
+        SWIFT_TARGET="arm64-apple-macos12.0"
+        ARCH_DESC="Apple Silicon (arm64 / M1+)"
+        ;;
+    x86_64)
+        RUST_TARGET="x86_64-apple-darwin"
+        SWIFT_TARGET="x86_64-apple-macos12.0"
+        ARCH_DESC="Intel (x86_64)"
+        ;;
+    universal)
+        ARCH_DESC="Universal Binary (arm64 + x86_64)"
+        ;;
+    *)
+        echo "❌ Unsupported architecture: $ARCH (supported: arm64, x86_64, universal)"
+        exit 1
+        ;;
+esac
+
 echo "=========================================="
-echo "🔨 Building Apple TV Remote for macOS (.app)"
+echo "🔨 Building Apple TV Remote for macOS (.app) [$ARCH_DESC]"
 echo "=========================================="
 
 cd "$ROOT_DIR"
 
-# 1. Compile Rust core binary (Universal Binary: arm64 + x86_64)
-echo "🦀 [1/4] Compiling Rust core engine (atv-cli) as Universal Binary..."
-cargo build --release -p atv-cli --target aarch64-apple-darwin
-cargo build --release -p atv-cli --target x86_64-apple-darwin
-lipo -create -output "$ROOT_DIR/target/release/atv-cli" \
-    "$ROOT_DIR/target/aarch64-apple-darwin/release/atv-cli" \
-    "$ROOT_DIR/target/x86_64-apple-darwin/release/atv-cli"
-echo "   ✅ Universal Binary created: $(lipo -info "$ROOT_DIR/target/release/atv-cli")"
+# 1. Compile Rust core binary
+BUILD_DIR="$ROOT_DIR/build"
+mkdir -p "$BUILD_DIR"
+
+if [ "$ARCH" = "universal" ]; then
+    echo "🦀 [1/4] Compiling Rust core engine (atv-cli) as Universal Binary..."
+    cargo build --release -p atv-cli --target aarch64-apple-darwin
+    cargo build --release -p atv-cli --target x86_64-apple-darwin
+    mkdir -p "$ROOT_DIR/target/release"
+    lipo -create -output "$ROOT_DIR/target/release/atv-cli" \
+        "$ROOT_DIR/target/aarch64-apple-darwin/release/atv-cli" \
+        "$ROOT_DIR/target/x86_64-apple-darwin/release/atv-cli"
+    ATV_CLI_BIN="$ROOT_DIR/target/release/atv-cli"
+    echo "   ✅ Universal Binary created: $(lipo -info "$ATV_CLI_BIN")"
+else
+    echo "🦀 [1/4] Compiling Rust core engine (atv-cli) for $ARCH..."
+    cargo build --release -p atv-cli --target "$RUST_TARGET"
+    ATV_CLI_BIN="$ROOT_DIR/target/$RUST_TARGET/release/atv-cli"
+    echo "   ✅ Single-arch Binary created: $(file "$ATV_CLI_BIN")"
+fi
 
 # 2. Generate App Icon if missing
 if [ ! -f "$ROOT_DIR/mac-app/resources/AppIcon.icns" ]; then
@@ -28,21 +62,25 @@ else
 fi
 
 # 3. Compile Swift Native App
-echo "🍏 [3/4] Compiling Swift Native App..."
-BUILD_DIR="$ROOT_DIR/build"
-mkdir -p "$BUILD_DIR"
-
+echo "🍏 [3/4] Compiling Swift Native App for $ARCH..."
 SWIFT_BIN="$BUILD_DIR/AppleTVRemote"
-# Build Universal Binary for Swift (arm64 + x86_64)
-swiftc -O -target arm64-apple-macos12.0 \
-    "$ROOT_DIR"/mac-app/src/*.swift \
-    -o "${SWIFT_BIN}_arm64"
-swiftc -O -target x86_64-apple-macos12.0 \
-    "$ROOT_DIR"/mac-app/src/*.swift \
-    -o "${SWIFT_BIN}_x86_64"
-lipo -create -output "$SWIFT_BIN" "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
-rm -f "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
-echo "   ✅ Universal Binary created: $(lipo -info "$SWIFT_BIN")"
+
+if [ "$ARCH" = "universal" ]; then
+    swiftc -O -target arm64-apple-macos12.0 \
+        "$ROOT_DIR"/mac-app/src/*.swift \
+        -o "${SWIFT_BIN}_arm64"
+    swiftc -O -target x86_64-apple-macos12.0 \
+        "$ROOT_DIR"/mac-app/src/*.swift \
+        -o "${SWIFT_BIN}_x86_64"
+    lipo -create -output "$SWIFT_BIN" "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
+    rm -f "${SWIFT_BIN}_arm64" "${SWIFT_BIN}_x86_64"
+    echo "   ✅ Universal Swift Binary created: $(lipo -info "$SWIFT_BIN")"
+else
+    swiftc -O -target "$SWIFT_TARGET" \
+        "$ROOT_DIR"/mac-app/src/*.swift \
+        -o "$SWIFT_BIN"
+    echo "   ✅ Swift Binary created: $(file "$SWIFT_BIN")"
+fi
 
 # 4. Assemble macOS .app Bundle
 APP_BUNDLE="$BUILD_DIR/AppleTVRemote.app"
@@ -54,7 +92,7 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy binaries
 cp "$SWIFT_BIN" "$APP_BUNDLE/Contents/MacOS/AppleTVRemote"
-cp "$ROOT_DIR/target/release/atv-cli" "$APP_BUNDLE/Contents/MacOS/atv-cli"
+cp "$ATV_CLI_BIN" "$APP_BUNDLE/Contents/MacOS/atv-cli"
 chmod +x "$APP_BUNDLE/Contents/MacOS/AppleTVRemote"
 chmod +x "$APP_BUNDLE/Contents/MacOS/atv-cli"
 

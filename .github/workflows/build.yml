@@ -64,26 +64,27 @@ jobs:
             exit 1
           fi
 
-      - name: Build AppleTVRemote.app and AppleTVRemote.dmg
+      - name: Build AppleTVRemote DMGs (arm64 & x86_64)
         run: |
           chmod +x ./scripts/*.sh
-          ./scripts/build_app.sh
-          ./scripts/build_dmg.sh
+          ./scripts/build_dmg.sh all
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: AppleTVRemote-macOS
           path: |
-            build/AppleTVRemote.dmg
-            build/AppleTVRemote.app
+            build/AppleTVRemote-arm64.dmg
+            build/AppleTVRemote-x86_64.dmg
           retention-days: 14
 
       - name: Publish GitHub Release (on tag or manual release)
         if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: build/AppleTVRemote.dmg
+          files: |
+            build/AppleTVRemote-arm64.dmg
+            build/AppleTVRemote-x86_64.dmg
           generate_release_notes: true
           draft: false
           prerelease: false
@@ -106,26 +107,28 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android NDK & Build Tools
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Configure Pre-installed Android NDK
         run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | sort -V | tail -n1)
+          # Use pre-installed NDK from GitHub Actions runner (zero download time)
+          NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 | sort -V | tail -n1)
+          if [ -z "$NDK_PATH" ] && [ -n "$ANDROID_NDK_ROOT" ]; then
+            NDK_PATH="$ANDROID_NDK_ROOT"
           fi
-          echo "Using sdkmanager: $SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "ndk;26.1.10909125" "build-tools;34.0.0"
+          echo "Found pre-installed NDK: $NDK_PATH"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
-      - name: Install cargo-ndk
-        run: |
-          if ! command -v cargo-ndk &> /dev/null; then
-            cargo install cargo-ndk
-          fi
+      - name: Install cargo-ndk (Prebuilt binary)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
 
       - name: Decode Signing Certificate (.p12)
         env:
