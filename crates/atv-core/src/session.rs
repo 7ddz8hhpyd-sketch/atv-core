@@ -83,10 +83,6 @@ pub struct CompanionSession {
     srp: SrpServer,
     remote_session_id: u32,
     session_established: Arc<AtomicBool>,
-    /// Whether we have already pushed the initial power state to this client.
-    /// We push it lazily on the first encrypted control message so iOS has
-    /// fully enabled its decrypt path before we send E_OPACK frames.
-    power_state_pushed: bool,
     touch_origin: Option<(f64, f64)>,
     touch_last: Option<(f64, f64)>,
     touch_moved: bool,
@@ -130,7 +126,6 @@ impl CompanionSession {
             srp: SrpServer::new(pin, &identity.private_key),
             remote_session_id,
             session_established: Arc::new(AtomicBool::new(false)),
-            power_state_pushed: false,
             touch_origin: None,
             touch_last: None,
             touch_moved: false,
