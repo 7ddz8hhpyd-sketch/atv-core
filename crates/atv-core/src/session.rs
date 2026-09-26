@@ -83,6 +83,10 @@ pub struct CompanionSession {
     srp: SrpServer,
     remote_session_id: u32,
     session_established: Arc<AtomicBool>,
+    /// Whether we have already pushed the initial power state to this client.
+    /// We push it lazily on the first encrypted control message so iOS has
+    /// fully enabled its decrypt path before we send E_OPACK frames.
+    power_state_pushed: bool,
     touch_origin: Option<(f64, f64)>,
     touch_last: Option<(f64, f64)>,
     touch_moved: bool,
@@ -126,6 +130,7 @@ impl CompanionSession {
             srp: SrpServer::new(pin, &identity.private_key),
             remote_session_id,
             session_established: Arc::new(AtomicBool::new(false)),
+            power_state_pushed: false,
             touch_origin: None,
             touch_last: None,
             touch_moved: false,
@@ -299,7 +304,10 @@ impl CompanionSession {
             FrameType::PsStart | FrameType::PsNext | FrameType::PvStart | FrameType::PvNext => {
                 self.handle_auth(frame_type, &data).await
             }
-            FrameType::EOpack => self.handle_control(&data).await,
+            FrameType::EOpack => {
+                debug!("<< E_OPACK {}", data);
+                self.handle_control(&data).await
+            }
             other => {
                 debug!("{:?} {}", other, data);
                 Ok(())
@@ -523,14 +531,21 @@ impl CompanionSession {
         self.delegate.on_event(EventKind::Verified, "");
         self.inspector.emit("verified", "{}");
 
-        // Immediately push current power state (Awake) so iOS tvremoted knows
-        // device is awake and ready, unblocking session startup.
-        self.send_power_state(None).await?;
-
         Ok(())
     }
 
     async fn handle_control(&mut self, data: &Value) -> Result<()> {
+        // On the first encrypted control message, push the current power state.
+        // Doing it here (rather than in pair_verify_m3) guarantees that iOS has
+        // fully switched its cipher context before we send E_OPACK — this
+        // prevents the reconnect hang where iOS drops our premature push and
+        // then waits forever for a power state event that never arrives again.
+        if !self.power_state_pushed {
+            self.power_state_pushed = true;
+            info!("pushing initial power state (Awake) on first encrypted message");
+            self.send_power_state(None).await?;
+        }
+
         self.delegate
             .on_event(EventKind::ControlMessage, &data.to_string());
         let identifier = data.get("_i").and_then(Value::as_str).map(str::to_string);
@@ -550,6 +565,7 @@ impl CompanionSession {
                 let remote_sid = self.remote_session_id;
                 self.send_response(xid, Some(Value::dict(vec![Value::kv("_sid", Value::Int(remote_sid as u64))])), 0)
                     .await?;
+                info!("<< _sessionStart: session established (local_sid={local_sid}, remote_sid={remote_sid})");
                 self.delegate.on_event(
                     EventKind::SessionStarted,
                     &format!(
@@ -585,6 +601,7 @@ impl CompanionSession {
                 // immediately after session startup, so publish the flag
                 // before subscriptions have necessarily arrived.
                 self.send_media_capabilities(xid).await?;
+                info!("<< TVRCSessionStart: remote ready (version={version})");
                 self.delegate.on_event(EventKind::RemoteReady, "");
                 self.inspector.emit("remote_ready", &format!("{{\"version\":\"{version}\"}}"));
             }
@@ -592,6 +609,7 @@ impl CompanionSession {
                 self.session_established.store(false, Ordering::SeqCst);
                 self.inspector.session_stopped();
                 self.send_response(xid, None, 0).await?;
+                info!("<< _sessionStop: remote session closed");
                 self.delegate
                     .on_event(EventKind::SessionStopped, &content.to_string());
                 self.inspector.emit("session_stopped", "{}");
@@ -722,11 +740,13 @@ impl CompanionSession {
             }
             Some("_systemInfo") | Some("SystemInfo") => {
                 self.send_response(xid, None, 0).await?;
-                // Always push power state when system info is received,
-                // unblocking iOS tvremoted session startup.
+                info!("<< _systemInfo: replied and refreshed power state");
                 self.send_power_state(None).await?;
             }
             _ => {
+                if let Some(id) = &identifier {
+                    debug!("<< unhandled control message: {id} content={content}");
+                }
                 if xid.is_some() {
                     self.send_response(xid, None, 0).await?;
                 }

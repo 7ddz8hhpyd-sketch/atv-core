@@ -37,6 +37,7 @@ fn usage() -> ! {
            --direction, --dpad            Initial mode: Direction keys (D-pad) (default on other targets)\n\
            --speed <FLOAT>                Initial mouse speed multiplier (default: 0.5)\n\
            --verbose-events               Enable verbose terminal logging for buttons and events (default: quiet debug)\n\
+           --debug, -d                    Enable debug-level logging for all protocol packets\n\
            --ui-port <PORT>               Debug Web UI port (default: 8765)\n\
            --no-ui                        Disable Debug Web UI\n\
            --open                         Automatically open Debug UI in default browser\n\
@@ -128,6 +129,7 @@ fn parse_args() -> CliArgs {
                 mouse_speed_explicit = true;
             }
             "--verbose-events" | "--verbose" => verbose_events = true,
+            "--debug" | "-d" => {}
             "--no-prompt" => prompt_accessibility = false,
             "--ui-port" => {
                 let port: u16 = args
@@ -173,10 +175,17 @@ fn parse_args() -> CliArgs {
 
 #[tokio::main]
 async fn main() {
+    let has_debug_flag = std::env::args().any(|a| a == "--debug" || a == "-d");
+    let default_filter = if has_debug_flag {
+        "atv_core=debug,atv_cli=debug"
+    } else {
+        "atv_core=info,atv_cli=info"
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "atv_core=info,atv_cli=info".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .init();
 
