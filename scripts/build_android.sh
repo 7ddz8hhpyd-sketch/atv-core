@@ -24,6 +24,10 @@ echo "=== Building atv-android native library ==="
 
 cd "$ROOT_DIR"
 
+BUILD_MODE="${1:-release}"
+KEYSTORE_PATH="${2:-$ROOT_DIR/Corvo_Development.p12}"
+KEYSTORE_PASS="${3:-${MACOS_CERT_P12_PASSWORD:-corvo-developer}}"
+
 TARGET="aarch64-linux-android"
 JNILIBS_DIR="$ROOT_DIR/android-tv/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNILIBS_DIR"
@@ -39,14 +43,43 @@ fi
 
 echo "Native library copied to: $JNILIBS_DIR/libatv_android.so"
 
-echo "=== Building Android TV APK ==="
+echo "=== Building Android TV APK ($BUILD_MODE) ==="
 cd "$ROOT_DIR/android-tv"
-if [ -f "./gradlew" ]; then
-    ./gradlew assembleDebug
-elif command -v gradle &> /dev/null; then
-    gradle assembleDebug
+
+if [ "$BUILD_MODE" = "release" ]; then
+    ./gradlew assembleRelease
+    
+    UNSIGNED_APK="$ROOT_DIR/android-tv/app/build/outputs/apk/release/app-release-unsigned.apk"
+    SIGNED_APK="$ROOT_DIR/android-tv/app/build/outputs/apk/release/FakeAtv-release.apk"
+    
+    if [ -f "$KEYSTORE_PATH" ]; then
+        echo "🔏 Signing APK with keystore: $KEYSTORE_PATH..."
+        # Locate apksigner from Android SDK
+        APKSIGNER_BIN=""
+        if [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
+            APKSIGNER_BIN=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n1)
+        fi
+        
+        if [ -n "$APKSIGNER_BIN" ] && [ -x "$APKSIGNER_BIN" ]; then
+            "$APKSIGNER_BIN" sign \
+                --ks "$KEYSTORE_PATH" \
+                --ks-type PKCS12 \
+                --ks-pass "pass:$KEYSTORE_PASS" \
+                --out "$SIGNED_APK" \
+                "$UNSIGNED_APK"
+            
+            echo "🔍 Verifying APK signature..."
+            "$APKSIGNER_BIN" verify -v "$SIGNED_APK"
+            echo "✅ Signed APK created at: $SIGNED_APK"
+        else
+            echo "⚠️ apksigner not found in ANDROID_HOME/build-tools. Left APK as unsigned: $UNSIGNED_APK"
+        fi
+    else
+        echo "ℹ️ Keystore $KEYSTORE_PATH not found, keeping unsigned APK at $UNSIGNED_APK"
+    fi
 else
-    echo "Gradle not found directly in path. You can open 'android-tv' in Android Studio to build the APK."
+    ./gradlew assembleDebug
 fi
 
 echo "Done!"
+
