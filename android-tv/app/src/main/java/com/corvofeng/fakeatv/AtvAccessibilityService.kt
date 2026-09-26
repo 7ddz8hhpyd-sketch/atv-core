@@ -1,0 +1,156 @@
+package com.corvofeng.fakeatv
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.content.Context
+import android.graphics.Path
+import android.os.Build
+import android.util.DisplayMetrics
+import android.util.Log
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+
+class AtvAccessibilityService : AccessibilityService() {
+
+    companion object {
+        private const val TAG = "AtvAccessibility"
+        var instance: AtvAccessibilityService? = null
+            private set
+
+        val isServiceRunning: Boolean
+            get() = instance != null
+    }
+
+    private var screenWidth = 1920
+    private var screenHeight = 1080
+    private var pointerX = 960f
+    private var pointerY = 540f
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        Log.i(TAG, "AtvAccessibilityService connected")
+
+        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm != null) {
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getMetrics(metrics)
+            screenWidth = metrics.widthPixels
+            screenHeight = metrics.heightPixels
+            pointerX = screenWidth / 2f
+            pointerY = screenHeight / 2f
+            Log.i(TAG, "Screen resolution: ${screenWidth}x${screenHeight}")
+        }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // No-op
+    }
+
+    override fun onInterrupt() {
+        Log.w(TAG, "AtvAccessibilityService interrupted")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
+        Log.i(TAG, "AtvAccessibilityService destroyed")
+    }
+
+    fun handleButton(name: String) {
+        Log.d(TAG, "handleButton: $name")
+        when (name) {
+            "menu" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+            "power" -> performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)
+            "select" -> {
+                // Try focused node click first, then fallback to enter keyevent or center tap
+                val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    ?: findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                if (focused != null && focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    Log.d(TAG, "Clicked focused node")
+                } else {
+                    execInputKeyEvent("KEYCODE_DPAD_CENTER")
+                }
+            }
+            "up" -> navigateDpad(AccessibilityNodeInfo.FOCUS_INPUT, "KEYCODE_DPAD_UP", 0, -200)
+            "down" -> navigateDpad(AccessibilityNodeInfo.FOCUS_INPUT, "KEYCODE_DPAD_DOWN", 0, 200)
+            "left" -> navigateDpad(AccessibilityNodeInfo.FOCUS_INPUT, "KEYCODE_DPAD_LEFT", -200, 0)
+            "right" -> navigateDpad(AccessibilityNodeInfo.FOCUS_INPUT, "KEYCODE_DPAD_RIGHT", 200, 0)
+            "play_pause" -> execInputKeyEvent("KEYCODE_MEDIA_PLAY_PAUSE")
+            "volume_up" -> execInputKeyEvent("KEYCODE_VOLUME_UP")
+            "volume_down" -> execInputKeyEvent("KEYCODE_VOLUME_DOWN")
+            "mute" -> execInputKeyEvent("KEYCODE_VOLUME_MUTE")
+            "siri" -> execInputKeyEvent("KEYCODE_SEARCH")
+            else -> execInputKeyEvent("KEYCODE_${name.uppercase()}")
+        }
+    }
+
+    private fun navigateDpad(focusType: Int, fallbackKeycode: String, swipeDx: Int, swipeDy: Int) {
+        val focused = findFocus(focusType)
+        val direction = when (fallbackKeycode) {
+            "KEYCODE_DPAD_UP" -> android.view.View.FOCUS_UP
+            "KEYCODE_DPAD_DOWN" -> android.view.View.FOCUS_DOWN
+            "KEYCODE_DPAD_LEFT" -> android.view.View.FOCUS_LEFT
+            "KEYCODE_DPAD_RIGHT" -> android.view.View.FOCUS_RIGHT
+            else -> 0
+        }
+
+        if (focused != null && direction != 0) {
+            val next = focused.focusSearch(direction)
+            if (next != null && next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+                return
+            }
+        }
+
+        // Fallback: try executing input keyevent if available
+        if (!execInputKeyEvent(fallbackKeycode)) {
+            // Alternatively perform swipe gesture
+            val cx = screenWidth / 2f
+            val cy = screenHeight / 2f
+            swipe(cx, cy, cx + swipeDx, cy + swipeDy, 100)
+        }
+    }
+
+    private fun execInputKeyEvent(keycode: String): Boolean {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycode))
+            process.waitFor() == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun handleTouch(dx: Double, dy: Double, phase: Int) {
+        if (phase == 2) { // Moved
+            val sensitivity = 1.5f
+            pointerX = (pointerX + dx.toFloat() * sensitivity).coerceIn(0f, screenWidth.toFloat())
+            pointerY = (pointerY + dy.toFloat() * sensitivity).coerceIn(0f, screenHeight.toFloat())
+        }
+    }
+
+    fun handleMouseClick() {
+        tap(pointerX, pointerY)
+    }
+
+    private fun tap(x: Float, y: Float) {
+        val path = Path().apply {
+            moveTo(x, y)
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        dispatchGesture(gesture, null, null)
+    }
+
+    private fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long) {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        dispatchGesture(gesture, null, null)
+    }
+}

@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Apple TV Remote Inspector</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090b10;
+      --panel: rgba(22, 26, 35, .85);
+      --line: rgba(255, 255, 255, .1);
+      --muted: #8c96aa;
+      --text: #f4f7ff;
+      --blue: #5da9ff;
+      --cyan: #70f1dc;
+      --red: #ff6b7d;
+      --green: #4caf50;
+      --orange: #ffa726;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 0%, #172342 0, transparent 38%),
+        radial-gradient(circle at 90% 15%, #132e30 0, transparent 35%),
+        var(--bg);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    }
+    main { width: min(1440px, calc(100% - 40px)); margin: 0 auto; padding: 24px 0 40px; }
+    header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 26px; letter-spacing: -.03em; }
+    .subtitle { margin-top: 4px; color: var(--muted); }
+    .status { display: flex; align-items: center; gap: 9px; color: var(--muted); font-weight: 500; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); box-shadow: 0 0 12px currentColor; }
+    .dot.online { color: var(--cyan); background: var(--cyan); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .column { display: grid; gap: 16px; align-content: start; }
+    .card { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); backdrop-filter: blur(18px); overflow: hidden; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+    .card-head h2 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+    .pill { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .last-action { min-height: 140px; display: grid; place-items: center; text-align: center; padding: 20px; }
+    .action-name { font-size: clamp(32px, 4.5vw, 56px); font-weight: 750; letter-spacing: -.04em; color: var(--text); }
+    .action-meta { margin-top: 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .action-state { display: inline-block; min-width: 50px; margin-left: 6px; padding: 2px 8px; border-radius: 999px; background: rgba(93,169,255,.14); color: var(--blue); }
+    
+    /* Virtual Remote */
+    .remote-wrap { padding: 18px; display: flex; justify-content: center; gap: 20px; align-items: center; }
+    .remote-dpad {
+      display: grid;
+      grid-template-columns: 56px 56px 56px;
+      grid-template-rows: 56px 56px 56px;
+      gap: 6px;
+    }
+    .r-btn {
+      background: rgba(255, 255, 255, .08);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--text);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      font-weight: 600;
+      transition: all .1s ease;
+      user-select: none;
+    }
+    .r-btn:hover { background: rgba(93, 169, 255, .25); border-color: var(--blue); }
+    .r-btn:active { transform: scale(0.95); background: var(--blue); color: #000; }
+    .r-center { grid-column: 2; grid-row: 2; border-radius: 50%; font-size: 11px; }
+    .remote-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 180px; }
+    .remote-actions .r-btn { height: 42px; border-radius: 8px; font-size: 13px; }
+
+    .touch-wrap { position: relative; aspect-ratio: 1.6; min-height: 320px; background: linear-gradient(145deg, rgba(255,255,255,.035), transparent); }
+    canvas { display: block; width: 100%; height: 100%; }
+    .touch-readout { position: absolute; top: 12px; left: 14px; color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
+    .history { list-style: none; margin: 0; padding: 6px; max-height: 240px; overflow: auto; }
+    .history li { display: grid; grid-template-columns: 80px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+    .history li:nth-child(odd) { background: rgba(255,255,255,.03); }
+    .time, code { color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .raw { height: 360px; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #b8c1d4; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .vol-wrap { padding: 14px 18px; }
+    .vol-bar { height: 14px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .vol-fill { height: 100%; width: 50%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); transition: width .18s ease; }
+    .vol-fill.muted { background: var(--red); }
+    .vol-state { margin-top: 8px; color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } main { width: min(100% - 20px, 720px); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Apple TV Remote Inspector</h1>
+        <div class="subtitle">Apple TV Remote 实时状态监控 & 交互调试面板</div>
+      </div>
+      <div class="status">
+        <span id="dot" class="dot"></span>
+        <span id="connection">等待连接</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- 左列：最近按钮、虚拟遥控器调试、音量、历史 -->
+      <section class="column">
+        <article class="card">
+          <div class="card-head">
+            <h2>最近按键操作</h2>
+            <span id="eventCount" class="pill">0 events</span>
+          </div>
+          <div class="last-action">
+            <div>
+              <div id="actionName" class="action-name">—</div>
+              <div id="actionMeta" class="action-meta">等待遥控器输入</div>
+            </div>
+          </div>
+        </article>
+
+        <!-- 交互式虚拟遥控器（可在网页上直接点击调试系统响应） -->
+        <article class="card">
+          <div class="card-head">
+            <h2>模拟控制 (Web Debug Trigger)</h2>
+            <span class="pill">点击直接控制系统</span>
+          </div>
+          <div class="remote-wrap">
+            <div class="remote-dpad">
+              <button class="r-btn" style="grid-column: 2; grid-row: 1" onclick="sendAction('up')">▲</button>
+              <button class="r-btn" style="grid-column: 1; grid-row: 2" onclick="sendAction('left')">◀</button>
+              <button class="r-btn r-center" onclick="sendAction('select')">OK</button>
+              <button class="r-btn" style="grid-column: 3; grid-row: 2" onclick="sendAction('right')">▶</button>
+              <button class="r-btn" style="grid-column: 2; grid-row: 3" onclick="sendAction('down')">▼</button>
+            </div>
+            <div class="remote-actions">
+              <button class="r-btn" onclick="sendAction('menu')">◀ Back</button>
+              <button class="r-btn" onclick="sendAction('home')">⌂ Home</button>
+              <button class="r-btn" onclick="sendAction('play_pause')">⏯ Play</button>
+              <button class="r-btn" onclick="sendAction('mute')">🔇 Mute</button>
+              <button class="r-btn" onclick="sendAction('volume_up')">Vol +</button>
+              <button class="r-btn" onclick="sendAction('volume_down')">Vol -</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>音频音量</h2>
+            <span id="volPct" class="pill">50%</span>
+          </div>
+          <div class="vol-wrap">
+            <div class="vol-bar"><div id="volFill" class="vol-fill"></div></div>
+            <div id="volState" class="vol-state">当前音量 50%</div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>按键历史</h2>
+            <span class="pill">最新在上</span>
+          </div>
+          <ul id="history" class="history"></ul>
+        </article>
+      </section>
+
+      <!-- 右列：触控板轨迹、原始协议报文 -->
+      <section class="column">
+        <article class="card">
+          <div class="card-head">
+            <h2>触控轨迹实时预览</h2>
+            <span id="phase" class="pill">idle</span>
+          </div>
+          <div class="touch-wrap">
+            <canvas id="touch"></canvas>
+            <div id="coords" class="touch-readout">dx —&nbsp;&nbsp;dy —</div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>协议日志流</h2>
+            <span class="pill">实时输出</span>
+          </div>
+          <pre id="raw" class="raw"></pre>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const canvas = $('touch');
+    const ctx = canvas.getContext('2d');
+    const rawLines = [];
+    let eventCount = 0;
+    let drawing = false;
+    let curX = 0, curY = 0;
+
+    function resizeCanvas() {
+      const ratio = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * ratio);
+      canvas.height = Math.round(rect.height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      curX = rect.width / 2;
+      curY = rect.height / 2;
+    }
+    new ResizeObserver(resizeCanvas).observe(canvas);
+
+    function drawTouch(data) {
+      const phase = Number(data.phase ?? data._tPh ?? 0);
+      const dx = Number(data.dx || 0);
+      const dy = Number(data.dy || 0);
+      const names = {1: 'Began', 2: 'Moved', 3: 'Stationary', 4: 'Ended'};
+      $('phase').textContent = names[phase] || `phase ${phase}`;
+      $('coords').innerHTML = `dx ${dx.toFixed(1)}&nbsp;&nbsp;dy ${dy.toFixed(1)}`;
+
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#70f1dc';
+      ctx.shadowColor = '#70f1dc';
+      ctx.shadowBlur = 8;
+
+      const rect = canvas.getBoundingClientRect();
+
+      if (phase === 1) { // Began
+        curX = rect.width / 2;
+        curY = rect.height / 2;
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ctx.beginPath();
+        ctx.arc(curX, curY, 4, 0, Math.PI * 2);
+        ctx.stroke();
+        drawing = true;
+      } else if (phase === 2 && drawing) { // Moved
+        ctx.beginPath();
+        ctx.moveTo(curX, curY);
+        curX = Math.max(10, Math.min(rect.width - 10, curX + dx * 0.8));
+        curY = Math.max(10, Math.min(rect.height - 10, curY + dy * 0.8));
+        ctx.lineTo(curX, curY);
+        ctx.stroke();
+      } else if (phase === 4) { // Ended
+        ctx.beginPath();
+        ctx.arc(curX, curY, 8, 0, Math.PI * 2);
+        ctx.stroke();
+        drawing = false;
+      }
+    }
+
+    function showButton(packet) {
+      const data = packet.data || {};
+      const name = String(data.name || packet.data || 'unknown');
+      $('actionName').textContent = name.toUpperCase().replaceAll('_', ' ');
+      $('actionMeta').innerHTML = `<span class="action-state">PRESSED</span>`;
+
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="time">${packet.timestamp}</span><strong>${name}</strong><code>EVENT</code>`;
+      $('history').prepend(li);
+      while ($('history').children.length > 25) $('history').lastChild.remove();
+    }
+
+    function showAudioState(packet) {
+      const data = packet.data || {};
+      const muted = Boolean(data.muted);
+      const vol = Number(data.volume ?? 0.5);
+      const pct = Math.round(vol * 100);
+      $('volFill').style.width = `${pct}%`;
+      $('volFill').classList.toggle('muted', muted);
+      $('volPct').textContent = muted ? `已静音 (${pct}%)` : `${pct}%`;
+      $('volState').textContent = muted ? `静音中 — 实际音量 ${pct}%` : `音量 ${pct}% (${Math.round(vol * 16)}/16)`;
+    }
+
+    function appendRaw(packet) {
+      rawLines.push(`[${String(packet.sequence).padStart(6, '0')}] ${packet.timestamp} ${packet.event} ${JSON.stringify(packet.data)}`);
+      while (rawLines.length > 150) rawLines.shift();
+      $('raw').textContent = rawLines.join('\n');
+      $('raw').scrollTop = $('raw').scrollHeight;
+    }
+
+    function sendAction(button) {
+      fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ button })
+      }).catch(console.error);
+    }
+
+    // Server-Sent Events 连接
+    const source = new EventSource('/events');
+    source.onopen = () => {
+      $('dot').classList.add('online');
+      $('connection').textContent = '已连接到服务端';
+    };
+    source.onerror = () => {
+      $('dot').classList.remove('online');
+      $('connection').textContent = '连接中断，重连中...';
+    };
+    source.onmessage = message => {
+      try {
+        const packet = JSON.parse(message.data);
+        eventCount = Math.max(eventCount, Number(packet.sequence) || 0);
+        $('eventCount').textContent = `${eventCount} events`;
+        if (packet.event === 'button') showButton(packet);
+        if (packet.event === 'touch') drawTouch(packet.data || {});
+        if (packet.event === 'audio_state') showAudioState(packet);
+        if (packet.event === 'client_connected') {
+          $('dot').classList.add('online');
+          $('connection').textContent = `客户端已连接 (${packet.data.peer || ''})`;
+        }
+        if (packet.event === 'verified') {
+          $('connection').textContent = '已通过加密认证';
+        }
+        if (packet.event === 'session_started') {
+          $('connection').textContent = '遥控会话已就绪';
+        }
+        if (packet.event === 'client_disconnected') {
+          $('connection').textContent = '客户端已断开';
+        }
+        appendRaw(packet);
+      } catch (e) {
+        console.error(e);
+      }
+    };
+  </script>
+</body>
+</html>

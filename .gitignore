@@ -1,0 +1,67 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Android & Gradle
+.gradle/
+**/build/
+local.properties
+.cxx/
+captures/
+.navigation/
+
+# Android output packages
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+
+# Native libraries / Compiled objects
+*.so
+*.dylib
+*.dll
+*.a
+*.o
+*.lib
+*.exe
+*.bin
+android-tv/app/src/main/jniLibs/
+
+# Archives & JARs (allow gradle-wrapper.jar)
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+*.war
+*.ear
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log

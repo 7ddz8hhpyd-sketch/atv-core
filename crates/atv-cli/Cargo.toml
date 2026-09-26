@@ -1,0 +1,11 @@
+[package]
+name = "atv-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+atv-core = { path = "../atv-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "process", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
