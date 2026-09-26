@@ -27,6 +27,7 @@ if [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; then
     security create-keychain -p "$CI_PASSWORD" "$CI_KEYCHAIN" || true
     security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
     security unlock-keychain -p "$CI_PASSWORD" "$CI_KEYCHAIN"
+    security default-keychain -s "$CI_KEYCHAIN"
     KEYCHAIN="$CI_KEYCHAIN"
 fi
 
@@ -47,7 +48,13 @@ openssl pkcs12 -in "$P12_FILE" -nokeys -out "$TEMP_CERT" -passin "pass:$PASSWORD
 
 if [ -s "$TEMP_CERT" ]; then
     echo "🛡️  配置代码签名信任策略..."
-    security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TEMP_CERT" >/dev/null 2>&1 || true
+    if [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; then
+        # CI 无头环境中，普通用户修改用户级信任配置会弹出 GUI 授权弹窗导致挂起
+        # 使用 sudo + -d 导入系统管理域信任，避免任何交互式弹窗
+        sudo security add-trusted-cert -d -r trustRoot -p codeSign "$TEMP_CERT" || true
+    else
+        security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TEMP_CERT" >/dev/null 2>&1 || true
+    fi
 fi
 rm -f "$TEMP_CERT"
 

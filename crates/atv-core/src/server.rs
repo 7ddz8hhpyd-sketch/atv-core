@@ -482,7 +482,13 @@ async fn companion_loop(
         let delegate = delegate.clone();
         let inspector = inspector.clone();
         let mouse_mode = mouse_mode.clone();
-        tokio::spawn(handle_companion(stream, identity, pin, delegate, inspector, mouse_mode));
+        let mut client_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = handle_companion(stream, identity, pin, delegate, inspector, mouse_mode) => {},
+                _ = client_shutdown.changed() => {},
+            }
+        });
     }
 }
 
@@ -499,7 +505,7 @@ async fn handle_companion(
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "?".into());
     info!("companion client connected: {peer}");
-    inspector.set_client_connected(Some(&peer));
+    inspector.add_client(&peer);
     delegate.on_event(EventKind::ClientConnected, &peer);
     inspector.emit("client_connected", &format!("{{\"peer\":\"{peer}\"}}"));
 
@@ -514,6 +520,8 @@ async fn handle_companion(
         inspector.clone(),
     );
     let mut disconnect_reason = "peer_closed".to_string();
+
+    const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024; // 2MB protection against malformed frames
 
     loop {
         let mut header = [0u8; 4];
@@ -532,6 +540,11 @@ async fn handle_companion(
             break;
         };
         let length = u32::from_be_bytes([0, header[1], header[2], header[3]]) as usize;
+        if length > MAX_FRAME_LENGTH {
+            disconnect_reason = format!("error:frame too large ({length} bytes)");
+            warn!("companion frame exceeds limit: {length} bytes from {peer}");
+            break;
+        }
         let mut payload = vec![0u8; length];
         if let Err(e) = reader.read_exact(&mut payload).await {
             disconnect_reason = format!("incomplete_frame:{e}");
@@ -546,7 +559,7 @@ async fn handle_companion(
     }
 
     info!("companion client disconnected: {peer}");
-    inspector.set_client_connected(None);
+    inspector.remove_client(&peer);
     delegate.on_event(
         EventKind::ClientDisconnected,
         &format!("{peer} reason={disconnect_reason}"),

@@ -86,6 +86,8 @@ extern "C" {
     ) -> *const c_void;
     fn objc_getClass(name: *const u8) -> *mut c_void;
     fn sel_registerName(name: *const u8) -> *mut c_void;
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
     fn dlsym(handle: *mut c_void, symbol: *const u8) -> *mut c_void;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
@@ -96,6 +98,7 @@ extern "C" {
 /// which triggers the native macOS Now Playing daemon and HUD volume bezel.
 pub fn send_system_media_key(key: i32) {
     unsafe {
+        let pool = objc_autoreleasePoolPush();
         let cls_name = b"NSEvent\0";
         let sel_name = b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:\0";
         let cg_event_sel_name = b"CGEvent\0";
@@ -106,6 +109,7 @@ pub fn send_system_media_key(key: i32) {
 
         if nsevent_class.is_null() || other_event_sel.is_null() || cg_event_sel.is_null() {
             warn!("[macOS] Failed to get NSEvent class or selectors for media key");
+            objc_autoreleasePoolPop(pool);
             return;
         }
 
@@ -128,6 +132,7 @@ pub fn send_system_media_key(key: i32) {
         let msg_send = dlsym(RTLD_DEFAULT, b"objc_msgSend\0".as_ptr());
         if msg_send.is_null() {
             warn!("[macOS] Failed to locate objc_msgSend");
+            objc_autoreleasePoolPop(pool);
             return;
         }
         let other_event_fn: OtherEventFn = std::mem::transmute(msg_send);
@@ -159,6 +164,7 @@ pub fn send_system_media_key(key: i32) {
                 }
             }
         }
+        objc_autoreleasePoolPop(pool);
     }
 }
 
@@ -687,9 +693,11 @@ impl AtvDelegate for MacDelegate {
         }
         let percent = (volume * 100.0).round() as u32;
         let script = format!("set volume output volume {percent} with output muted {muted}");
-        let _ = Command::new("/usr/bin/osascript")
-            .args(["-e", &script])
-            .spawn();
+        std::thread::spawn(move || {
+            let _ = Command::new("/usr/bin/osascript")
+                .args(["-e", &script])
+                .status();
+        });
     }
 
     fn on_mode_changed(&self, mouse_mode: bool) {

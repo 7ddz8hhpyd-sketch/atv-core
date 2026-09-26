@@ -3,8 +3,8 @@
 //! Collects operations (buttons, touches, volume, auth/lifecycle state)
 //! and broadcasts them over Server-Sent Events (SSE) to connected web browsers.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
@@ -14,9 +14,8 @@ pub struct InspectorHub {
     sequence: AtomicU64,
     history: Mutex<VecDeque<String>>,
     tx: broadcast::Sender<String>,
-    client_connected: AtomicBool,
-    client_peer: Mutex<Option<String>>,
-    session_ready: AtomicBool,
+    connected_clients: Mutex<HashSet<String>>,
+    active_sessions: AtomicUsize,
 }
 
 impl InspectorHub {
@@ -26,39 +25,74 @@ impl InspectorHub {
             sequence: AtomicU64::new(0),
             history: Mutex::new(VecDeque::with_capacity(HISTORY_MAX_LEN)),
             tx,
-            client_connected: AtomicBool::new(false),
-            client_peer: Mutex::new(None),
-            session_ready: AtomicBool::new(false),
+            connected_clients: Mutex::new(HashSet::new()),
+            active_sessions: AtomicUsize::new(0),
         })
+    }
+
+    pub fn add_client(&self, peer: &str) {
+        if let Ok(mut clients) = self.connected_clients.lock() {
+            clients.insert(peer.to_string());
+        }
+    }
+
+    pub fn remove_client(&self, peer: &str) {
+        if let Ok(mut clients) = self.connected_clients.lock() {
+            clients.remove(peer);
+        }
+    }
+
+    pub fn session_started(&self) {
+        self.active_sessions.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn session_stopped(&self) {
+        self.active_sessions
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
+                Some(val.saturating_sub(1))
+            })
+            .ok();
     }
 
     pub fn set_client_connected(&self, peer: Option<&str>) {
         match peer {
-            Some(p) => {
-                self.client_connected.store(true, Ordering::SeqCst);
-                if let Ok(mut g) = self.client_peer.lock() {
-                    *g = Some(p.to_string());
-                }
-            }
+            Some(p) => self.add_client(p),
             None => {
-                self.client_connected.store(false, Ordering::SeqCst);
-                if let Ok(mut g) = self.client_peer.lock() {
-                    *g = None;
+                if let Ok(mut clients) = self.connected_clients.lock() {
+                    clients.clear();
                 }
-                self.session_ready.store(false, Ordering::SeqCst);
+                self.active_sessions.store(0, Ordering::SeqCst);
             }
         }
     }
 
     pub fn set_session_ready(&self, ready: bool) {
-        self.session_ready.store(ready, Ordering::SeqCst);
+        if ready {
+            self.session_started();
+        } else {
+            self.session_stopped();
+        }
     }
 
     pub fn get_client_info(&self) -> (bool, Option<String>, bool) {
-        let connected = self.client_connected.load(Ordering::SeqCst);
-        let peer = self.client_peer.lock().ok().and_then(|g| g.clone());
-        let ready = self.session_ready.load(Ordering::SeqCst);
-        (connected, peer, ready)
+        let clients = self.connected_clients.lock().ok();
+        let connected_list: Vec<String> = clients
+            .map(|c| c.iter().cloned().collect())
+            .unwrap_or_default();
+        let connected = !connected_list.is_empty();
+        let peer_summary = if connected_list.is_empty() {
+            None
+        } else if connected_list.len() == 1 {
+            Some(connected_list[0].clone())
+        } else {
+            Some(format!(
+                "{} ({} clients)",
+                connected_list.join(", "),
+                connected_list.len()
+            ))
+        };
+        let ready = self.active_sessions.load(Ordering::SeqCst) > 0;
+        (connected, peer_summary, ready)
     }
 
     /// Emit an event with JSON payload to all connected debug clients.
@@ -107,3 +141,64 @@ fn chrono_timestamp() -> String {
     let s = secs % 60;
     format!("{:02}:{:02}:{:02}.{:03}", hours, mins, s, millis)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multi_client_lifecycle() {
+        let hub = InspectorHub::new();
+        let (conn, peer, ready) = hub.get_client_info();
+        assert!(!conn);
+        assert!(peer.is_none());
+        assert!(!ready);
+
+        // Client 1 connects
+        hub.add_client("192.168.1.100:50000");
+        let (conn, peer, ready) = hub.get_client_info();
+        assert!(conn);
+        assert_eq!(peer.as_deref(), Some("192.168.1.100:50000"));
+        assert!(!ready);
+
+        // Client 1 starts session
+        hub.session_started();
+        let (conn, _, ready) = hub.get_client_info();
+        assert!(conn);
+        assert!(ready);
+
+        // Client 2 connects
+        hub.add_client("192.168.1.101:50002");
+        let (conn, peer, ready) = hub.get_client_info();
+        assert!(conn);
+        assert!(ready);
+        let p_str = peer.unwrap();
+        assert!(p_str.contains("2 clients"));
+
+        // Client 2 starts session
+        hub.session_started();
+        assert_eq!(hub.active_sessions.load(Ordering::SeqCst), 2);
+
+        // Client 1 disconnects
+        hub.remove_client("192.168.1.100:50000");
+        hub.session_stopped();
+
+        // Client 2 should STILL be connected and active!
+        let (conn, peer, ready) = hub.get_client_info();
+        assert!(conn);
+        assert_eq!(peer.as_deref(), Some("192.168.1.101:50002"));
+        assert!(ready);
+        assert_eq!(hub.active_sessions.load(Ordering::SeqCst), 1);
+
+        // Client 2 disconnects
+        hub.remove_client("192.168.1.101:50002");
+        hub.session_stopped();
+
+        let (conn, peer, ready) = hub.get_client_info();
+        assert!(!conn);
+        assert!(peer.is_none());
+        assert!(!ready);
+        assert_eq!(hub.active_sessions.load(Ordering::SeqCst), 0);
+    }
+}
+

@@ -3,7 +3,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use ed25519_dalek::{Signer, SigningKey};
 use tokio::io::AsyncWriteExt;
@@ -524,18 +523,10 @@ impl CompanionSession {
         self.delegate.on_event(EventKind::Verified, "");
         self.inspector.emit("verified", "{}");
 
-        // Kick verified connections that never start a remote session: a
-        // wedged tvremoted connects, verifies and sends _systemInfo but no
-        // _sessionStart; closing early makes the phone retry immediately.
-        let established = self.session_established.clone();
-        let writer = self.writer.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(8)).await;
-            if !established.load(Ordering::SeqCst) {
-                info!("verified but no _sessionStart within 8s; closing to force retry");
-                let _ = writer.lock().await.shutdown().await;
-            }
-        });
+        // Immediately push current power state (Awake) so iOS tvremoted knows
+        // device is awake and ready, unblocking session startup.
+        self.send_power_state(None).await?;
+
         Ok(())
     }
 
@@ -550,7 +541,7 @@ impl CompanionSession {
         match identifier.as_deref() {
             Some("_sessionStart") => {
                 self.session_established.store(true, Ordering::SeqCst);
-                self.inspector.set_session_ready(true);
+                self.inspector.session_started();
                 let local_sid = content
                     .get("_sid")
                     .or_else(|| content.get("sid"))
@@ -574,7 +565,8 @@ impl CompanionSession {
                 );
             }
             Some("TVRCSessionStart") => {
-                self.inspector.set_session_ready(true);
+                self.session_established.store(true, Ordering::SeqCst);
+                self.inspector.session_started();
                 let version = content
                     .get("ProtocolVersionKey")
                     .and_then(Value::as_str)
@@ -597,24 +589,29 @@ impl CompanionSession {
                 self.inspector.emit("remote_ready", &format!("{{\"version\":\"{version}\"}}"));
             }
             Some("_sessionStop") => {
-                self.inspector.set_session_ready(false);
+                self.session_established.store(false, Ordering::SeqCst);
+                self.inspector.session_stopped();
                 self.send_response(xid, None, 0).await?;
                 self.delegate
                     .on_event(EventKind::SessionStopped, &content.to_string());
                 self.inspector.emit("session_stopped", "{}");
             }
             Some("_hidC") => {
+                self.session_established.store(true, Ordering::SeqCst);
                 self.handle_hid_command(&content, xid).await?;
             }
             Some("_touchStart") => {
+                self.session_established.store(true, Ordering::SeqCst);
                 self.send_response(xid, Some(Value::dict(vec![Value::kv("_i", Value::Int(1))])), 0)
                     .await?;
             }
             Some("_hidT") => {
+                self.session_established.store(true, Ordering::SeqCst);
                 self.send_response(xid, None, 0).await?;
                 self.handle_touch(&content);
             }
             Some("_touchStop") | Some("_touchMove") | Some("_tiStop") => {
+                self.session_established.store(true, Ordering::SeqCst);
                 self.send_response(xid, None, 0).await?;
             }
             Some("_interest") => {
@@ -725,16 +722,9 @@ impl CompanionSession {
             }
             Some("_systemInfo") | Some("SystemInfo") => {
                 self.send_response(xid, None, 0).await?;
-                // A real Apple TV pushes power state to clients that identify
-                // themselves with a non-null _i inside _systemInfo. iOS gates
-                // session startup on this when reconnecting.
-                let has_identifier = content
-                    .get("_i")
-                    .map(|v| !matches!(v, Value::Null))
-                    .unwrap_or(false);
-                if has_identifier {
-                    self.send_power_state(None).await?;
-                }
+                // Always push power state when system info is received,
+                // unblocking iOS tvremoted session startup.
+                self.send_power_state(None).await?;
             }
             _ => {
                 if xid.is_some() {
@@ -972,3 +962,12 @@ impl CompanionSession {
         );
     }
 }
+
+impl Drop for CompanionSession {
+    fn drop(&mut self) {
+        if self.session_established.load(Ordering::SeqCst) {
+            self.inspector.session_stopped();
+        }
+    }
+}
+
