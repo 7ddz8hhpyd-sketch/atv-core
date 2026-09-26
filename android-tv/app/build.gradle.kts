@@ -49,6 +49,16 @@ android {
             jniLibs.srcDirs("src/main/jniLibs")
         }
     }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/LICENSE*"
+            excludes += "/META-INF/NOTICE*"
+            excludes += "/META-INF/*.md"
+            excludes += "/META-INF/*.txt"
+        }
+    }
 }
 
 dependencies {
@@ -56,4 +66,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.leanback:leanback:1.0.0")
+    implementation("dev.mobile:dadb:1.2.6")
 }

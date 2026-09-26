@@ -75,6 +75,7 @@
                 <action android:name="com.dangbei.action.WAKEUP" />
                 <action android:name="com.mstar.android.intent.action.SUSPEND_RESUME" />
                 <action android:name="com.droidlogic.intent.action.STANDBY_WAKEUP" />
+                <action android:name="com.corvofeng.fakeatv.SET_MENU_BINDING" />
             </intent-filter>
         </receiver>
 

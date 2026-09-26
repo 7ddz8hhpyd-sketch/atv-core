@@ -1,24 +1,22 @@
 package com.corvofeng.fakeatv
 
-import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.Executors
 
 /**
- * Direct hardware remote controller simulator.
+ * Direct hardware remote controller simulator (Tier 1).
  *
  * Writes Linux input_event structs directly to the TV box's remote receiver
  * device node (/dev/input/event0, driver: fdd70030.pwm / gpio-keys/remotectl).
  * Key layout follows /vendor/usr/keylayout/fdd70030_pwm.kl.
  *
- * This completely bypasses Android's AccessibilityService framework, providing:
+ * Provides:
  *  - 0-latency physical remote simulation
  *  - Universal compatibility across all TV apps, Leanback launchers, and video players
- *  - Immune to accessibility service crashes and domestic TV ROM unbinding
+ *  - Bypasses Android framework when hardware permissions allow
  */
 object RemoteController {
     private const val TAG = "RemoteController"
@@ -60,7 +58,6 @@ object RemoteController {
         "siri" to KEY_SEARCH
     )
 
-    private val executor = Executors.newSingleThreadExecutor()
     private var outputStream: FileOutputStream? = null
     var isHardwareAvailable: Boolean = false
         private set
@@ -69,39 +66,46 @@ object RemoteController {
         initDevice()
     }
 
-    private fun initDevice(): Boolean {
+    fun initDevice(): Boolean {
         try {
             val file = File(DEFAULT_EVENT_PATH)
             if (file.exists() && file.canWrite()) {
-                outputStream = FileOutputStream(file)
+                if (outputStream == null) {
+                    outputStream = FileOutputStream(file)
+                }
                 isHardwareAvailable = true
                 Log.i(TAG, "Hardware remote driver opened successfully: $DEFAULT_EVENT_PATH")
                 return true
             } else {
-                Log.w(TAG, "Cannot write to $DEFAULT_EVENT_PATH (exists=${file.exists()}, canWrite=${file.canWrite()})")
+                Log.d(TAG, "Cannot write to $DEFAULT_EVENT_PATH (exists=${file.exists()}, canWrite=${file.canWrite()})")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open $DEFAULT_EVENT_PATH", e)
+            Log.d(TAG, "Failed to open $DEFAULT_EVENT_PATH: ${e.message}")
         }
         isHardwareAvailable = false
         return false
     }
 
-    fun handleButton(name: String) {
-        val keyCode = KEY_MAP[name.lowercase()]
-        if (keyCode == null) {
-            Log.w(TAG, "Unknown button name: $name")
-            return
-        }
+    @Volatile
+    var menuBindingButton: String = "none"
 
-        executor.execute {
-            if (sendHardwareKey(keyCode)) {
-                Log.d(TAG, "Hardware key sent: $name (code $keyCode)")
-            } else {
-                Log.w(TAG, "Hardware key failed for $name, falling back to input keyevent")
-                fallbackKeyevent(name)
-            }
-        }
+    fun sendKey(name: String, isMappedToMenu: Boolean = false): Boolean {
+        val lowerName = name.lowercase().trim()
+        val mappedMenu = isMappedToMenu || (menuBindingButton.isNotBlank() &&
+                menuBindingButton != "none" &&
+                menuBindingButton.equals(lowerName, ignoreCase = true))
+
+        val keyCode = if (mappedMenu) {
+            KEY_MENU
+        } else {
+            KEY_MAP[lowerName]
+        } ?: return false
+
+        return sendHardwareKey(keyCode)
+    }
+
+    fun handleButton(name: String) {
+        sendKey(name)
     }
 
     private fun sendHardwareKey(keyCode: Int): Boolean {
@@ -122,11 +126,13 @@ object RemoteController {
 
                 stream.write(buf.array())
                 stream.flush()
+                Log.d(TAG, "Hardware key written successfully: keyCode=$keyCode")
                 return true
             } catch (e: Exception) {
-                Log.e(TAG, "Error writing to hardware event device", e)
+                Log.w(TAG, "Error writing to hardware event device: ${e.message}")
                 try { outputStream?.close() } catch (_: Exception) {}
                 outputStream = null
+                isHardwareAvailable = false
                 return false
             }
         }
@@ -144,29 +150,5 @@ object RemoteController {
         buf.putShort(type.toShort())
         buf.putShort(code.toShort())
         buf.putInt(value)
-    }
-
-    private fun fallbackKeyevent(name: String) {
-        val keycodeName = when (name.lowercase()) {
-            "up" -> "KEYCODE_DPAD_UP"
-            "down" -> "KEYCODE_DPAD_DOWN"
-            "left" -> "KEYCODE_DPAD_LEFT"
-            "right" -> "KEYCODE_DPAD_RIGHT"
-            "select" -> "KEYCODE_DPAD_CENTER"
-            "menu" -> "KEYCODE_BACK"
-            "home" -> "KEYCODE_HOME"
-            "play_pause" -> "KEYCODE_MEDIA_PLAY_PAUSE"
-            "volume_up" -> "KEYCODE_VOLUME_UP"
-            "volume_down" -> "KEYCODE_VOLUME_DOWN"
-            "mute" -> "KEYCODE_VOLUME_MUTE"
-            "power" -> "KEYCODE_POWER"
-            "siri" -> "KEYCODE_SEARCH"
-            else -> "KEYCODE_${name.uppercase()}"
-        }
-        try {
-            Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycodeName)).waitFor()
-        } catch (e: Exception) {
-            Log.e(TAG, "Fallback keyevent failed", e)
-        }
     }
 }

@@ -1,139 +1,196 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#121212"
-    android:orientation="vertical"
-    android:padding="48dp">
-
-    <TextView
-        android:id="@+id/tvTitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Apple TV Remote Receiver"
-        android:textColor="#FFFFFF"
-        android:textSize="32sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/tvSubtitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Control your Android TV directly using an iPhone / iPad Control Center Remote"
-        android:textColor="#B0BEC5"
-        android:textSize="16sp" />
+    android:fillViewport="true"
+    android:background="#121212">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:orientation="horizontal">
+        android:orientation="vertical"
+        android:padding="28dp">
+
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Apple TV Remote Receiver"
+            android:textColor="#FFFFFF"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Control your Android TV directly using an iPhone / iPad Control Center Remote"
+            android:textColor="#B0BEC5"
+            android:textSize="15sp" />
 
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="#1E1E1E"
-            android:orientation="vertical"
-            android:padding="24dp">
-
-            <TextView
-                android:id="@+id/tvPin"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Pairing PIN: 1111"
-                android:textColor="#4CAF50"
-                android:textSize="26sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/tvIp"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="IP Address: Loading..."
-                android:textColor="#ECEFF1"
-                android:textSize="18sp" />
-
-            <TextView
-                android:id="@+id/tvStatus"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="Status: Initializing..."
-                android:textColor="#4CAF50"
-                android:textSize="18sp" />
-
-            <TextView
-                android:id="@+id/tvAccessibility"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="Accessibility Service: Checking..."
-                android:textColor="#ECEFF1"
-                android:textSize="16sp" />
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal">
 
             <LinearLayout
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:orientation="horizontal">
+                android:layout_weight="1"
+                android:background="#1E1E1E"
+                android:orientation="vertical"
+                android:padding="20dp">
 
-                <Button
-                    android:id="@+id/btnToggle"
+                <TextView
+                    android:id="@+id/tvPin"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Stop Server"
-                    android:focusable="true" />
+                    android:text="Pairing PIN: 1111"
+                    android:textColor="#4CAF50"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
 
-                <Button
-                    android:id="@+id/btnAccessibility"
+                <TextView
+                    android:id="@+id/tvIp"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="16dp"
-                    android:text="Accessibility Settings"
-                    android:focusable="true" />
+                    android:layout_marginTop="10dp"
+                    android:text="IP Address: Loading..."
+                    android:textColor="#ECEFF1"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Status: Initializing..."
+                    android:textColor="#4CAF50"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/tvAccessibility"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Accessibility Service: Checking..."
+                    android:textColor="#ECEFF1"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/tvMenuBinding"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Menu 键映射: 无 (默认)"
+                    android:textColor="#ECEFF1"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvInjectionMode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="按键注入: 自动自适应 (硬件 -> ADB -> 无障碍)"
+                    android:textColor="#81D4FA"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvDriverStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="通道检测: 硬件驱动[--] | 本地ADB[--] | 无障碍[--]"
+                    android:textColor="#ECEFF1"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btnToggle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Stop Server"
+                        android:focusable="true" />
+
+                    <Button
+                        android:id="@+id/btnAccessibility"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="14dp"
+                        android:text="Accessibility Settings"
+                        android:focusable="true" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btnInjectionMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="切换按键注入模式"
+                        android:focusable="true" />
+
+                    <Button
+                        android:id="@+id/btnMenuBinding"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="14dp"
+                        android:text="设置 Menu 键"
+                        android:focusable="true" />
+
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="20dp"
+                android:layout_weight="1"
+                android:background="#1E1E1E"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Live Event Log"
+                    android:textColor="#90CAF9"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_marginTop="10dp">
+
+                    <TextView
+                        android:id="@+id/tvLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="Waiting for Apple TV Remote connection..."
+                        android:textColor="#CFD8DC"
+                        android:textSize="13sp" />
+
+                </ScrollView>
 
             </LinearLayout>
 
         </LinearLayout>
 
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="24dp"
-            android:layout_weight="1"
-            android:background="#1E1E1E"
-            android:orientation="vertical"
-            android:padding="24dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Live Event Log"
-                android:textColor="#90CAF9"
-                android:textSize="20sp"
-                android:textStyle="bold" />
-
-            <ScrollView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:layout_marginTop="12dp">
-
-                <TextView
-                    android:id="@+id/tvLog"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:text="Waiting for Apple TV Remote connection..."
-                    android:textColor="#CFD8DC"
-                    android:textSize="14sp" />
-
-            </ScrollView>
-
-        </LinearLayout>
-
     </LinearLayout>
 
-</LinearLayout>
+</ScrollView>

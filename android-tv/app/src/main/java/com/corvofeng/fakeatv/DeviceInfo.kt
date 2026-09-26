@@ -11,6 +11,9 @@ import java.util.UUID
 
 object DeviceInfo {
 
+    const val PREF_MENU_BUTTON_BINDING = "menu_button_binding"
+    const val PREF_INJECTION_MODE = "injection_mode"
+
     fun getPrefs(context: Context): SharedPreferences {
         val storageContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !context.isDeviceProtectedStorage) {
             try {
@@ -22,6 +25,22 @@ object DeviceInfo {
             context
         }
         return storageContext.getSharedPreferences("fakeatv_device_prefs", Context.MODE_PRIVATE)
+    }
+
+    fun getMenuButtonBinding(context: Context): String {
+        return getPrefs(context).getString(PREF_MENU_BUTTON_BINDING, "none") ?: "none"
+    }
+
+    fun setMenuButtonBinding(context: Context, buttonName: String) {
+        getPrefs(context).edit().putString(PREF_MENU_BUTTON_BINDING, buttonName.lowercase()).apply()
+    }
+
+    fun getInjectionMode(context: Context): String {
+        return getPrefs(context).getString(PREF_INJECTION_MODE, "auto") ?: "auto"
+    }
+
+    fun setInjectionMode(context: Context, mode: String) {
+        getPrefs(context).edit().putString(PREF_INJECTION_MODE, mode.lowercase()).apply()
     }
 
     fun getDeviceName(context: Context): String {

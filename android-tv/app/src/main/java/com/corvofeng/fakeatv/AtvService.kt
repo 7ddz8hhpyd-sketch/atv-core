@@ -28,10 +28,12 @@ class AtvService : Service(), AtvNative.Callback {
 
         const val ACTION_START = "com.corvofeng.fakeatv.ACTION_START"
         const val ACTION_STOP = "com.corvofeng.fakeatv.ACTION_STOP"
+        const val ACTION_SET_MENU_BINDING = "com.corvofeng.fakeatv.SET_MENU_BINDING"
         const val BROADCAST_EVENT = "com.corvofeng.fakeatv.EVENT_BROADCAST"
 
         const val EXTRA_NAME = "extra_name"
         const val EXTRA_PIN = "extra_pin"
+        const val EXTRA_BUTTON = "extra_button"
         const val EXTRA_EVENT_TYPE = "extra_event_type"
         const val EXTRA_EVENT_DETAIL = "extra_event_detail"
 
@@ -56,8 +58,28 @@ class AtvService : Service(), AtvNative.Callback {
         super.onCreate()
         createNotificationChannel()
         protectProcess()
+        KeyDispatcher.init(this)
+        initMenuBinding()
         registerNetworkCallback()
         registerScreenReceiver()
+    }
+
+    private fun initMenuBinding() {
+        val binding = DeviceInfo.getMenuButtonBinding(this)
+        KeyDispatcher.menuBindingButton = binding
+        RemoteController.menuBindingButton = binding
+        AtvAccessibilityService.instance?.menuBindingButton = binding
+        Log.i(TAG, "Initialized menu button binding: $binding")
+    }
+
+    private fun applyMenuBinding(button: String) {
+        val lower = button.lowercase().trim()
+        DeviceInfo.setMenuButtonBinding(this, lower)
+        KeyDispatcher.menuBindingButton = lower
+        RemoteController.menuBindingButton = lower
+        AtvAccessibilityService.instance?.menuBindingButton = lower
+        Log.i(TAG, "Applied menu button binding: $lower")
+        broadcast("MenuBinding", lower)
     }
 
     private fun protectProcess() {
@@ -101,7 +123,14 @@ class AtvService : Service(), AtvNative.Callback {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val action = intent?.action ?: return
-                    Log.i(TAG, "Received system wake/screen event: $action")
+                    Log.i(TAG, "Received broadcast: $action")
+                    if (action == ACTION_SET_MENU_BINDING) {
+                        val btn = intent.getStringExtra(EXTRA_BUTTON)
+                            ?: intent.getStringExtra("button")
+                            ?: "none"
+                        applyMenuBinding(btn)
+                        return
+                    }
                     if (!isRunning && !isStopping) {
                         val name = currentName ?: DeviceInfo.getDeviceName(this@AtvService)
                         startServer(name, currentPin)
@@ -111,6 +140,7 @@ class AtvService : Service(), AtvNative.Callback {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_USER_PRESENT)
+                addAction(ACTION_SET_MENU_BINDING)
             }
             registerReceiver(receiver, filter)
             screenReceiver = receiver
@@ -125,6 +155,12 @@ class AtvService : Service(), AtvNative.Callback {
                 stopServer()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+            ACTION_SET_MENU_BINDING -> {
+                val btn = intent.getStringExtra(EXTRA_BUTTON)
+                    ?: intent.getStringExtra("button")
+                    ?: "none"
+                applyMenuBinding(btn)
             }
             else -> {
                 val name = intent?.getStringExtra(EXTRA_NAME) ?: DeviceInfo.getDeviceName(this)
@@ -242,12 +278,15 @@ class AtvService : Service(), AtvNative.Callback {
     }
 
     override fun onButton(name: String) {
-        Log.i(TAG, "onButton: $name")
-        RemoteController.handleButton(name)
-        if (!RemoteController.isHardwareAvailable) {
-            AtvAccessibilityService.instance?.handleButton(name)
-        }
-        broadcast("Button", name)
+        val lowerName = name.lowercase().trim()
+        val isMapped = KeyDispatcher.menuBindingButton.isNotBlank() &&
+                KeyDispatcher.menuBindingButton != "none" &&
+                KeyDispatcher.menuBindingButton.equals(lowerName, ignoreCase = true)
+
+        val display = if (isMapped) "$name -> MENU" else name
+        val engine = KeyDispatcher.dispatchButton(name)
+        Log.i(TAG, "onButton: $display via [$engine]")
+        broadcast("Button", "$display [$engine]")
     }
 
     override fun onTouch(dx: Double, dy: Double, phase: Int) {

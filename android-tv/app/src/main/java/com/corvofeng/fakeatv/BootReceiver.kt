@@ -13,7 +13,19 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        Log.i(TAG, "onReceive boot/wake broadcast: $action")
+        Log.i(TAG, "onReceive broadcast: $action")
+
+        if (action == AtvService.ACTION_SET_MENU_BINDING) {
+            val btn = intent.getStringExtra(AtvService.EXTRA_BUTTON)
+                ?: intent.getStringExtra("button")
+                ?: "none"
+            val lower = btn.lowercase().trim()
+            DeviceInfo.setMenuButtonBinding(context, lower)
+            RemoteController.menuBindingButton = lower
+            AtvAccessibilityService.instance?.menuBindingButton = lower
+            Log.i(TAG, "Menu binding updated via BootReceiver: $lower")
+            return
+        }
 
         val deviceName = DeviceInfo.getDeviceName(context)
         val serviceIntent = Intent(context, AtvService::class.java).apply {

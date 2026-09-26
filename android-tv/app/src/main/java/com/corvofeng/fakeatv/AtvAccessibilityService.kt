@@ -31,7 +31,8 @@ class AtvAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "AtvAccessibilityService connected")
+        menuBindingButton = DeviceInfo.getMenuButtonBinding(this)
+        Log.i(TAG, "AtvAccessibilityService connected, menuBindingButton=$menuBindingButton")
 
         val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         if (wm != null) {
@@ -80,18 +81,30 @@ class AtvAccessibilityService : AccessibilityService() {
         Log.i(TAG, "AtvAccessibilityService destroyed")
     }
 
-    fun handleButton(name: String) {
-        Log.d(TAG, "handleButton: $name")
-        when (name) {
+    @Volatile
+    var menuBindingButton: String = "none"
+
+    fun sendKey(name: String, isMappedToMenu: Boolean = false): Boolean {
+        val lowerName = name.lowercase().trim()
+        val mappedMenu = isMappedToMenu || (menuBindingButton.isNotBlank() &&
+                menuBindingButton != "none" &&
+                menuBindingButton.equals(lowerName, ignoreCase = true))
+
+        if (mappedMenu) {
+            Log.d(TAG, "Button $name redirected to KEYCODE_MENU")
+            return execInputKeyEvent("KEYCODE_MENU") || performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+
+        return when (lowerName) {
             "menu" -> performGlobalAction(GLOBAL_ACTION_BACK)
             "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
             "power" -> performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)
             "select" -> {
-                // Try focused node click first, then fallback to enter keyevent or center tap
                 val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                     ?: findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
                 if (focused != null && focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                     Log.d(TAG, "Clicked focused node")
+                    true
                 } else {
                     execInputKeyEvent("KEYCODE_DPAD_CENTER")
                 }
@@ -105,11 +118,15 @@ class AtvAccessibilityService : AccessibilityService() {
             "volume_down" -> execInputKeyEvent("KEYCODE_VOLUME_DOWN")
             "mute" -> execInputKeyEvent("KEYCODE_VOLUME_MUTE")
             "siri" -> execInputKeyEvent("KEYCODE_SEARCH")
-            else -> execInputKeyEvent("KEYCODE_${name.uppercase()}")
+            else -> execInputKeyEvent("KEYCODE_${lowerName.uppercase()}")
         }
     }
 
-    private fun navigateDpad(focusType: Int, fallbackKeycode: String, swipeDx: Int, swipeDy: Int) {
+    fun handleButton(name: String) {
+        sendKey(name)
+    }
+
+    private fun navigateDpad(focusType: Int, fallbackKeycode: String, swipeDx: Int, swipeDy: Int): Boolean {
         val focused = findFocus(focusType)
         val direction = when (fallbackKeycode) {
             "KEYCODE_DPAD_UP" -> android.view.View.FOCUS_UP
@@ -122,17 +139,20 @@ class AtvAccessibilityService : AccessibilityService() {
         if (focused != null && direction != 0) {
             val next = focused.focusSearch(direction)
             if (next != null && next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
-                return
+                return true
             }
         }
 
         // Fallback: try executing input keyevent if available
-        if (!execInputKeyEvent(fallbackKeycode)) {
-            // Alternatively perform swipe gesture
-            val cx = screenWidth / 2f
-            val cy = screenHeight / 2f
-            swipe(cx, cy, cx + swipeDx, cy + swipeDy, 100)
+        if (execInputKeyEvent(fallbackKeycode)) {
+            return true
         }
+
+        // Alternatively perform swipe gesture
+        val cx = screenWidth / 2f
+        val cy = screenHeight / 2f
+        swipe(cx, cy, cx + swipeDx, cy + swipeDy, 100)
+        return true
     }
 
     private fun execInputKeyEvent(keycode: String): Boolean {
