@@ -39,7 +39,7 @@
 
 当你在 iPhone 控制中心下拉打开 Apple TV 遥控器轻扫滑屏时，系统通过 TLS 加密的 Companion Link 协议发送高频触控微积分坐标。`atv-core` 解析协议后，在 Android TV 上转换为网格焦点平滑移动，在 macOS 上则转换为带人体工学加速度曲线的光标平移。
 
-![手势与页面移动流程图](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/page_navigation_movement.svg)
+![手势与页面移动流程图](docs/images/page_navigation_movement.svg)
 
 ---
 
@@ -47,7 +47,7 @@
 
 为了保障按键与触控能顺利注入系统，请在首次运行前核对以下系统设置与权限：
 
-![前置条件与权限指南](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+![前置条件与权限指南](docs/images/prerequisites_and_permissions.svg)
 
 ### 1. Android TV 关键前置要求
 
@@ -64,7 +64,7 @@
 #### ② 必须接受系统 ADB 指纹授权与签名
 首次启动应用连接本地 ADB 时，Android TV 屏幕上会弹出系统级安全对话框：
 
-![ADB 授权弹窗示意](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+![ADB 授权弹窗示意](docs/images/prerequisites_and_permissions.svg)
 
 > ⚠️ **极为关键**：
 > 请务必使用电视遥控器**勾选「始终允许来自此计算机 (Always allow from this computer)」**，然后点击 **「允许 / OK」**。
@@ -79,7 +79,7 @@
 
 | 步骤 1: 辅助功能列表 | 步骤 2: 授权确认弹窗 | 步骤 3: 授权生效状态 |
 | :---: | :---: | :---: |
-| ![服务列表](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_accessibility_service_list.png) | ![授权确认](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_permission_dialog.png) | ![就绪状态](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) |
+| ![服务列表](docs/images/android_tv_accessibility_service_list.png) | ![授权确认](docs/images/android_tv_permission_dialog.png) | ![就绪状态](docs/images/android_tv_main_screen_ready.png) |
 
 ---
 
@@ -131,7 +131,7 @@
 
 | 1. 初始聚焦顶部导航 | 2. 向下滑动聚焦主推荐位 | 3. 继续下滑移动至应用卡片 |
 | :---: | :---: | :---: |
-| ![顶部导航](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_launcher_home.png) | ![推荐位聚焦](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_content.png) | ![应用卡片聚焦](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_apps.png) |
+| ![顶部导航](docs/images/android_tv_launcher_home.png) | ![推荐位聚焦](docs/images/android_tv_nav_content.png) | ![应用卡片聚焦](docs/images/android_tv_nav_apps.png) |
 
 * **轻触或按下中心 SELECT**：直接打开当前聚焦的卡片或播放视频。
 * **按返回键 `<`**：退回上一级页面；
@@ -145,7 +145,7 @@
 
 | 控制中心主仪表板 | 按键注入模式选择 | Menu 键自定义映射 |
 | :---: | :---: | :---: |
-| ![主界面](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) | ![注入模式](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_injection_mode_dialog.png) | ![Menu键绑定](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_menu_binding_dialog.png) |
+| ![主界面](docs/images/android_tv_main_screen_ready.png) | ![注入模式](docs/images/android_tv_injection_mode_dialog.png) | ![Menu键绑定](docs/images/android_tv_menu_binding_dialog.png) |
 
 * **三通道智能状态指示**：
   * **硬件通道**：检测是否存在 `/dev/input/event*` 直连驱动。
@@ -168,7 +168,7 @@
 
 本项目提供了专用的 **`scripts/bridge_emulator.py`** 桥接套件：
 
-![模拟器桥接工作流](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/emulator_operation_flow.svg)
+![模拟器桥接工作流](docs/images/emulator_operation_flow.svg)
 
 1. **ADB 端口透传**：将宿主机物理端口 (`49152`, `49153`, `49154`) 通过 `adb forward` 无缝穿透到模拟器内部。
 2. **mDNS 代理广播**：宿主机接管 Bonjour 广播通道，代表模拟器向 Wi-Fi 物理局域网宣告 `_mediaremotetv._tcp` 与 `_companion-link._tcp` 服务。
@@ -252,11 +252,11 @@ python3 scripts/bridge_emulator.py start -f
 
 ### 1. macOS 浏览器界面实景配图 (Web Inspector Mockup)
 
-![macOS 浏览器 Web Inspector 界面](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_browser_inspector.png)
+![macOS 浏览器 Web Inspector 界面](docs/images/mac_browser_inspector.png)
 
 ### 2. macOS Swift 宿主诊断与运行日志页面
 
-![macOS Swift Host 运行日志界面](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_debug_web_page.png)
+![macOS Swift Host 运行日志界面](docs/images/mac_debug_web_page.png)
 
 ### 核心功能亮点：
 * **触摸轨迹实时可视化**：实时 Canvas 渲染手指位移坐标、手势阶段（Began, Moved, Ended）与速度。

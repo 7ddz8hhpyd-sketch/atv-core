@@ -41,7 +41,7 @@ A high-performance Rust implementation of the Apple TV Companion Link and Media 
 
 When you open the Apple TV Remote in iOS Control Center and swipe the touchpad, micro-displacement coordinates are transmitted over a TLS-encrypted Companion Link session. `atv-core` decrypts and processes these inputs, translating them into grid focus movements on Android TV and high-precision cursor trajectories on macOS.
 
-![Remote Swipe & Navigation Flow](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/page_navigation_movement.svg)
+![Remote Swipe & Navigation Flow](docs/images/page_navigation_movement.svg)
 
 ---
 
@@ -49,7 +49,7 @@ When you open the Apple TV Remote in iOS Control Center and swipe the touchpad, 
 
 To ensure that touch gestures and simulated keystrokes are received and dispatched properly, please verify the following prerequisites before your first run:
 
-![Prerequisites & Permissions Guide](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+![Prerequisites & Permissions Guide](docs/images/prerequisites_and_permissions.svg)
 
 ### Android TV Requirements (ADB & Permissions)
 
@@ -66,7 +66,7 @@ To ensure that touch gestures and simulated keystrokes are received and dispatch
 #### 2. Accept the ADB RSA Authorization Prompt
 The first time the app attempts to establish the internal ADB connection, a system security dialog will appear on your TV screen:
 
-![ADB Authorization Prompt](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+![ADB Authorization Prompt](docs/images/prerequisites_and_permissions.svg)
 
 > ⚠️ **CRITICAL STEP**:
 > Using your TV remote, check the box: **"Always allow from this computer"**, then select **"Allow" / "OK"**.
@@ -81,7 +81,7 @@ The first time the app attempts to establish the internal ADB connection, a syst
 
 | 1. Services List | 2. Permission Confirmation | 3. Ready Status |
 | :---: | :---: | :---: |
-| ![Service List](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_accessibility_service_list.png) | ![Permission Dialog](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_permission_dialog.png) | ![Ready Status](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) |
+| ![Service List](docs/images/android_tv_accessibility_service_list.png) | ![Permission Dialog](docs/images/android_tv_permission_dialog.png) | ![Ready Status](docs/images/android_tv_main_screen_ready.png) |
 
 ---
 
@@ -133,7 +133,7 @@ On the Android TV / Google TV home screen, swiping the touchpad on your iPhone t
 
 | 1. Top Navigation Bar Focus | 2. Featured Content Hero Focus | 3. App Dock Grid Focus |
 | :---: | :---: | :---: |
-| ![Top Navigation](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_launcher_home.png) | ![Hero Focus](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_content.png) | ![App Row Focus](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_apps.png) |
+| ![Top Navigation](docs/images/android_tv_launcher_home.png) | ![Hero Focus](docs/images/android_tv_nav_content.png) | ![App Row Focus](docs/images/android_tv_nav_apps.png) |
 
 * **Tap / Click SELECT (Touchpad Center)**: Opens the currently focused application or plays media.
 * **Back Button (`<`)**: Returns to previous screen.
@@ -147,7 +147,7 @@ Opening the receiver app directly on your TV displays a real-time status monitor
 
 | Receiver Main Dashboard | Key Injection Mode Selection | Menu Key Rebinding Dialog |
 | :---: | :---: | :---: |
-| ![Main Dashboard](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) | ![Injection Mode](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_injection_mode_dialog.png) | ![Menu Key Binding](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_menu_binding_dialog.png) |
+| ![Main Dashboard](docs/images/android_tv_main_screen_ready.png) | ![Injection Mode](docs/images/android_tv_injection_mode_dialog.png) | ![Menu Key Binding](docs/images/android_tv_menu_binding_dialog.png) |
 
 * **Live Multi-Channel Status**:
   * **Hardware**: Checks for direct `/dev/input/event*` devices.
@@ -170,7 +170,7 @@ Android emulators run inside a private host-only NAT network (virtual IP `10.0.2
 
 The project provides an automated bridge suite: **`scripts/bridge_emulator.py`**:
 
-![Emulator Bridge Workflow](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/emulator_operation_flow.svg)
+![Emulator Bridge Workflow](docs/images/emulator_operation_flow.svg)
 
 1. **Port Forwarding**: Establishes `adb forward` tunnels for ports `49152` (MRP), `49153` (Companion Link), and `49154` (AirPlay).
 2. **Host mDNS Proxy**: Automatically advertises `_mediaremotetv._tcp` and `_companion-link._tcp` on your Mac's physical Wi-Fi interface.
@@ -254,11 +254,11 @@ When running on macOS, access the built-in diagnostic and remote control web con
 
 ### 1. macOS Browser UI Mockup (Web Inspector)
 
-![macOS Browser Web Inspector UI](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_browser_inspector.png)
+![macOS Browser Web Inspector UI](docs/images/mac_browser_inspector.png)
 
 ### 2. macOS Swift Host Diagnostics Web Page
 
-![macOS Swift Host Diagnostics](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_debug_web_page.png)
+![macOS Swift Host Diagnostics](docs/images/mac_debug_web_page.png)
 
 ### Features & Capabilities:
 * **Live Touchpad Canvas**: Visualizes finger coordinates, touch phases (`Began`, `Moved`, `Ended`), velocity, and relative displacement (`dx`, `dy`).
