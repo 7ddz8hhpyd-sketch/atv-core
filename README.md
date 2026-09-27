@@ -1,223 +1,323 @@
-# Fake Apple TV (atv-core)
+# Fake Apple TV (atv-core) 📺
 
-A high-performance Rust implementation of the Apple TV Companion Link / MRP protocol server. It allows real Apple devices (iPhone / iPad Control Center **Apple TV Remote**) to discover, pair, and control:
+> **English Version** | [中文版本](README_zh.md)
 
-1. **macOS (Mac mini / MacBook / iMac)** natively via CoreGraphics events, audio controls, and display management.
-2. **Android TV** via:
-   - **Direct Native App (APK)**: Runs directly on the Android TV using an AccessibilityService + JNI (`atv-android`).
-   - **Remote Network ADB**: Runs on macOS/Linux and forwards commands directly to the Android TV over network ADB.
+A high-performance Rust implementation of the Apple TV Companion Link and Media Remote Protocol (MRP) server. It enables real Apple devices (iPhone / iPad Control Center **Apple TV Remote**) to natively discover, pair, and control:
 
----
-
-## Workspace Structure
-
-```
-├── crates/
-│   ├── atv-core/        # Pure Rust core: Bonjour (mDNS), MRP, Companion Link, SRP pairing, OPACK, Crypto
-│   ├── atv-cli/         # Multi-target CLI executable (macOS native, Android ADB, or print)
-│   └── atv-android/     # Rust cdylib providing JNI bindings for Android TV
-├── mac-app/             # Native macOS Menu Bar Application (Swift AppKit)
-│   ├── Info.plist       # macOS App Bundle metadata
-│   ├── resources/       # Multi-resolution Retina AppIcon.icns
-│   └── src/             # Swift sources (StatusItem, ProcessManager, ApiClient, Accessibility)
-├── android-tv/          # Android TV Leanback Studio project (APK with AccessibilityService & UI)
-└── scripts/
-    ├── build_app.sh     # One-click build for standalone AppleTVRemote.app bundle
-    ├── build_dmg.sh     # One-click packaging for AppleTVRemote.dmg installer
-    ├── generate_icon.swift # Generates high-res macOS Retina AppIcon.icns
-    ├── install_mac.sh   # Build and configure background launchd service for Mac mini
-    └── build_android.sh # Cross-compile libatv_android.so and build the Android TV APK
-```
+1. **Android TV / Google TV / Android Boxes / Emulators**:
+   - **Direct Standalone APK**: Runs natively on Android TV using JNI (`atv-android`), a local zero-latency ADB daemon (`dadb`), and an Accessibility Service (`AtvAccessibilityService`).
+   - **Remote Network ADB Mode**: Runs on macOS/Linux and forwards remote commands to the Android TV over network ADB.
+2. **macOS (Mac mini / MacBook / iMac)**:
+   - Native Swift Menu Bar App (`AppleTVRemote.app`) with ultra-smooth dynamic ballistics mouse mode, arrow keys mode, system media controls, and hardware volume sync.
+   - Cross-platform CLI (`atv-cli`) for headless and automation environments.
+3. **Built-in Web Inspector & Debugger**:
+   - Browser-based diagnostic dashboard (`http://127.0.0.1:8765`) featuring live touchpad trajectory canvas, interactive virtual remote, volume gauges, sensitivity presets, and millisecond-level protocol event streams.
 
 ---
 
-## 0. macOS Native App & DMG Packaging (Swift + Rust)
+## Table of Contents
 
-本项目采用了**内核与外层彻底分离**的现代化架构：
-* **核心协议内核 (Rust)**：仅负责高性能网络通信、Bonjour 广播、SRP 安全配对、Companion Link 加密链路与手势事件分发。
-* **原生系统层封装 (Swift)**：采用原生 Swift + AppKit 打造轻量级 macOS 菜单栏状态应用（Menu Bar Agent App），负责应用生命周期、菜单栏实时状态、模式/速度切换、辅助功能权限提示与系统通知。
+- [1. Architecture & Remote Page Movement](#1-architecture--remote-page-movement)
+- [2. Crucial Prerequisites & Permissions (Must Read)](#2-crucial-prerequisites--permissions-must-read)
+  - [Android TV Requirements (ADB & Permissions)](#android-tv-requirements-adb--permissions)
+  - [macOS Requirements (Gatekeeper & Accessibility)](#macos-requirements-gatekeeper--accessibility)
+  - [Network & Pairing Requirements](#network--pairing-requirements)
+- [3. Android TV Page Navigation & App Experience](#3-android-tv-page-navigation--app-experience)
+  - [Remote Gestures & Focus Navigation](#remote-gestures--focus-navigation)
+  - [TV Dashboard & In-App Configuration](#tv-dashboard--in-app-configuration)
+- [4. Android Emulator Operations & Bridge Workflow](#4-android-emulator-operations--bridge-workflow)
+  - [Emulator Networking & Bridge Architecture](#emulator-networking--bridge-architecture)
+  - [Step-by-Step Emulator Testing Guide](#step-by-step-emulator-testing-guide)
+- [5. macOS Native App & CLI Guide](#5-macos-native-app--cli-guide)
+  - [One-Click App & DMG Packaging](#one-click-app--dmg-packaging)
+  - [Dynamic Modes & Trackpad Ballistics](#dynamic-modes--trackpad-ballistics)
+- [6. macOS Browser Real-Time Control UI (Web Inspector)](#6-macos-browser-real-time-control-ui-web-inspector)
+- [7. Protocol Key & Gesture Mapping Reference](#7-protocol-key--gesture-mapping-reference)
+- [8. Troubleshooting & FAQ](#8-troubleshooting--faq)
 
-### 📦 一键构建原生 `.app` 与 `.dmg` 安装包
+---
+
+## 1. Architecture & Remote Page Movement
+
+When you open the Apple TV Remote in iOS Control Center and swipe the touchpad, micro-displacement coordinates are transmitted over a TLS-encrypted Companion Link session. `atv-core` decrypts and processes these inputs, translating them into grid focus movements on Android TV and high-precision cursor trajectories on macOS.
+
+![Remote Swipe & Navigation Flow](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/page_navigation_movement.svg)
+
+---
+
+## 2. Crucial Prerequisites & Permissions (Must Read)
+
+To ensure that touch gestures and simulated keystrokes are received and dispatched properly, please verify the following prerequisites before your first run:
+
+![Prerequisites & Permissions Guide](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+
+### Android TV Requirements (ADB & Permissions)
+
+#### 1. Enable Developer Options & Network ADB
+* **Why must ADB be enabled?**
+  * Android TV sandboxes third-party apps, preventing them from simulating global physical hardware keys (D-pad Up/Down/Left/Right, Home, Back, Volume) across the desktop and other apps.
+  * The app includes an embedded high-performance `dadb` client that connects locally to `127.0.0.1:5555`. This achieves **sub-8ms latency** global key injection without requiring root. **If ADB is disabled, system-wide key injection will fail.**
+* **How to enable**:
+  1. Go to **Settings -> Device Preferences -> About** (or **System -> About** on Google TV).
+  2. Scroll to **Build Number** and click it **7 times** until you see the message: *"You are now a developer!"*.
+  3. Return to the previous menu, enter **Developer Options**.
+  4. Enable **USB Debugging** and **Network ADB Debugging**.
+
+#### 2. Accept the ADB RSA Authorization Prompt
+The first time the app attempts to establish the internal ADB connection, a system security dialog will appear on your TV screen:
+
+![ADB Authorization Prompt](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/prerequisites_and_permissions.svg)
+
+> ⚠️ **CRITICAL STEP**:
+> Using your TV remote, check the box: **"Always allow from this computer"**, then select **"Allow" / "OK"**.
+> If you cancel or dismiss this prompt, the internal ADB client will fail with an `Unauthorized` error.
+
+#### 3. Enable Accessibility Service Permission
+* **Purpose**: Dispatches global system actions (`GLOBAL_ACTION_BACK`, `GLOBAL_ACTION_HOME`, power dialog) and provides a non-ADB fallback navigation channel.
+* **How to enable**:
+  1. Click **"ACCESSIBILITY SETTINGS"** in the app's main dashboard.
+  2. Locate **Apple TV Remote Receiver** under Services (shown as *Off* by default).
+  3. Select it, toggle it **On**, and click **OK** in the system permission confirmation dialog.
+
+| 1. Services List | 2. Permission Confirmation | 3. Ready Status |
+| :---: | :---: | :---: |
+| ![Service List](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_accessibility_service_list.png) | ![Permission Dialog](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_permission_dialog.png) | ![Ready Status](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) |
+
+---
+
+### macOS Requirements (Gatekeeper & Accessibility)
+
+#### 1. Gatekeeper & Self-Signed Certificate Approval
+Official release binaries and DMGs are signed with a private development certificate (`Corvo Development`). On another Mac, macOS Gatekeeper will block the app with *"Apple cannot check it for malicious software"*.
+
+Resolve this with either option:
+
+* **Option A (Recommended)**: Import the included self-signed certificate into your macOS Keychain:
+  ```bash
+  ./scripts/import_certificate.sh Corvo_Development.p12
+  ```
+* **Option B (Quick Quarantine Removal)**: Remove the quarantine flag from the app:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/AppleTVRemote.app
+  ```
+  *(Alternatively: Right-click `AppleTVRemote.app` in Finder, hold `Option` or `Control`, select "Open", and click "Open" in the prompt).*
+
+#### 2. Grant macOS Accessibility Permissions
+Simulating keyboard and mouse events (`CGEvent`) requires Accessibility permission:
+1. Open **System Settings -> Privacy & Security -> Accessibility**.
+2. Ensure **AppleTVRemote** is enabled (or enable your terminal app like **Terminal** or **iTerm2** if running `atv-cli`).
+
+---
+
+### Network & Pairing Requirements
+
+1. **Same Local Network (LAN / Subnet)**: Your iPhone/iPad and Android TV / Mac must be connected to the same Wi-Fi network (2.4 GHz and 5 GHz bands can communicate).
+2. **Disable AP Isolation**: Ensure your Wi-Fi router does not have "AP Isolation" or "Guest Isolation" enabled, which blocks local mDNS (Bonjour UDP 5353) broadcasts.
+3. **Pairing PIN**: When prompted on your iPhone, enter the 4-digit pairing PIN shown on your TV screen (default: **`1111`**).
+
+---
+
+## 3. Android TV Page Navigation & App Experience
+
+### Remote Gestures & Focus Navigation
+
+On the Android TV / Google TV home screen, swiping the touchpad on your iPhone translates directly into grid focus movement across UI components:
+
+```
+[Top Navigation Bar (For you / Live / Apps)]
+                 ↕ (Swipe Down)
+[Featured Hero Media Card (e.g., Fletch)]
+                 ↕ (Swipe Down)
+[Application Dock Row (YouTube / VLC / Settings)]
+```
+
+| 1. Top Navigation Bar Focus | 2. Featured Content Hero Focus | 3. App Dock Grid Focus |
+| :---: | :---: | :---: |
+| ![Top Navigation](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_launcher_home.png) | ![Hero Focus](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_content.png) | ![App Row Focus](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_nav_apps.png) |
+
+* **Tap / Click SELECT (Touchpad Center)**: Opens the currently focused application or plays media.
+* **Back Button (`<`)**: Returns to previous screen.
+* **Home Button (TV Icon)**: Instantly returns to the Leanback launcher home screen.
+
+---
+
+### TV Dashboard & In-App Configuration
+
+Opening the receiver app directly on your TV displays a real-time status monitor and configuration options:
+
+| Receiver Main Dashboard | Key Injection Mode Selection | Menu Key Rebinding Dialog |
+| :---: | :---: | :---: |
+| ![Main Dashboard](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_main_screen_ready.png) | ![Injection Mode](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_injection_mode_dialog.png) | ![Menu Key Binding](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/android_tv_menu_binding_dialog.png) |
+
+* **Live Multi-Channel Status**:
+  * **Hardware**: Checks for direct `/dev/input/event*` devices.
+  * **ADB**: Confirms the local `127.0.0.1:5555` dadb connection is active.
+  * **Accessibility**: Confirms the background service is running.
+* **Key Injection Strategies**:
+  * Easily toggle between `Local ADB Only`, `Accessibility Only`, `ADB Preferred (A11y Fallback)`, and `Hardware Preferred`.
+* **Custom Android Menu Key Binding**:
+  * Since Apple TV Remotes do not have a dedicated Android `Menu` key, you can rebind the Play/Pause, Home, or Mute button to trigger `KEYCODE_MENU`.
+
+---
+
+## 4. Android Emulator Operations & Bridge Workflow
+
+If you do not have a physical Android TV or want to develop and test locally, you can use the Android Studio Android TV Emulator (AVD).
+
+### Emulator Networking & Bridge Architecture
+
+Android emulators run inside a private host-only NAT network (virtual IP `10.0.2.15`). Physical devices on your Wi-Fi (such as your iPhone) cannot directly reach or discover this virtual network.
+
+The project provides an automated bridge suite: **`scripts/bridge_emulator.py`**:
+
+![Emulator Bridge Workflow](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/emulator_operation_flow.svg)
+
+1. **Port Forwarding**: Establishes `adb forward` tunnels for ports `49152` (MRP), `49153` (Companion Link), and `49154` (AirPlay).
+2. **Host mDNS Proxy**: Automatically advertises `_mediaremotetv._tcp` and `_companion-link._tcp` on your Mac's physical Wi-Fi interface.
+3. **Seamless Pairing**: Your iPhone discovers "Android TV Emulator" as if it were a physical Apple TV on your desk.
+
+---
+
+### Step-by-Step Emulator Testing Guide
+
+#### Step 1: Start the Android TV Emulator
+Launch any Android TV or Google TV AVD image (Android 11+ / API 30+ recommended) via Android Studio Device Manager, or via CLI:
+```bash
+emulator -avd <Your_AVD_Name>
+```
+Verify that `adb devices` lists the emulator (typically `emulator-5554`).
+
+#### Step 2: Build & Install the App
+```bash
+# Cross-compile native Rust cdylib and build APK
+./scripts/build_android.sh
+adb -s emulator-5554 install -r android-tv/app/build/outputs/apk/debug/app-debug.apk
+
+# Launch the app on emulator
+adb -s emulator-5554 shell am start -n com.corvofeng.fakeatv/.MainActivity
+```
+
+#### Step 3: Start the Bridge Service
+```bash
+# Start background bridge daemon
+python3 scripts/bridge_emulator.py start
+
+# Or run in foreground with verbose output
+python3 scripts/bridge_emulator.py start -f
+```
+
+* Bridge management commands:
+  ```bash
+  python3 scripts/bridge_emulator.py status    # Check ports & mDNS status
+  python3 scripts/bridge_emulator.py logs -f   # Stream bridge logs
+  python3 scripts/bridge_emulator.py stop      # Terminate bridge daemon
+  ```
+
+#### Step 4: Discover & Control on iPhone
+1. Connect your iPhone to the same Wi-Fi network as your Mac.
+2. Swipe down to open iOS Control Center and tap the **Apple TV Remote** icon.
+3. Select **Android TV Emulator** from the device list.
+4. Enter PIN **`1111`** to complete pairing and start controlling the emulator!
+
+---
+
+## 5. macOS Native App & CLI Guide
+
+Transform your Mac mini or MacBook into an Apple TV target:
 
 ```bash
-# 1. 编译并打包为 macOS 应用程序 (build/AppleTVRemote.app)
-./scripts/build_app.sh           # 默认编译 Apple Silicon (arm64 / M1+)
-./scripts/build_app.sh x86_64    # 编译 Intel (x86_64)
-
-# 2. 编译并打包为磁盘映像安装包
-./scripts/build_dmg.sh           # 默认打包 arm64 (输出 build/AppleTVRemote-arm64.dmg)
-./scripts/build_dmg.sh x86_64    # 打包 x86_64 (输出 build/AppleTVRemote-x86_64.dmg)
-./scripts/build_dmg.sh all       # 同时打包 arm64 与 x86_64 两套 DMG
+# Build standalone DMG package
+./scripts/build_dmg.sh
 ```
 
-生成的 DMG 自带 `/Applications` 软链接，直接拖拽即可完成安装：
-* 启动后常驻 macOS 菜单栏，带原生 Apple TV 遥控器图标与实时状态徽标。
-* 点击菜单栏图标可随时切换「🖱️ 鼠标光标模式」与「◀▲▼▶ 方向键模式」，并可一键调节 0.5x ~ 2.0x 灵敏度预设与动态加速度。
-* 当 iPhone 连接或断开时，系统会自动弹出原生通知横幅提醒。
+Mount `build/AppleTVRemote-arm64.dmg` and drag the application to `/Applications`:
 
-### 🚨 在另一台 Mac 上无法启动？常见原因与解决方案
-
-**原因 1：架构不匹配（Intel vs Apple Silicon）**
-
-GitHub Releases 与构建 Artifacts 现已提供分开打包的 DMG，请按需下载对应架构：
-* **`AppleTVRemote-arm64.dmg`**：适用于 M1 / M2 / M3 / M4 等 Apple Silicon 芯片 Mac。
-* **`AppleTVRemote-x86_64.dmg`**：适用于旧款 Intel 处理器 Mac。
-
-**原因 2：Gatekeeper 拒绝启动（自签名证书不受信任）**
-
-`Corvo Development` / `AppleTVRemote Development` 是本机私有自签名证书，
-在**另一台 Mac** 上 macOS Gatekeeper 会显示「无法验证此 App 不包含恶意软件」并拒绝打开。
-
-解决方案（任选其一）：
-
-```bash
-# 方案 A — 在目标 Mac 上导入证书（推荐私人分发）
-# 1. 将仓库根目录的 Corvo_Development.p12 复制到目标 Mac
-./scripts/import_certificate.sh Corvo_Development.p12
-
-# 方案 B — 在目标 Mac 上一次性跳过 Gatekeeper
-xattr -dr com.apple.quarantine /Applications/AppleTVRemote.app
-# 或者：在 Finder 中右键 App → 选择「打开」→ 点击弹窗中的「打开」
-
-# 方案 C — 使用 Apple Developer 正式账号签名（用于公开分发）
-CODESIGN_IDENTITY="Apple Development: you@example.com" ./scripts/build_app.sh
-```
+* **Lightweight Menu Bar Agent**: Native Swift AppKit architecture consuming under 20MB RAM.
+* **Dual-Mode Control (Directional vs Smooth Mouse)**:
+  * **Smooth Mouse Mode**: Ergonomic dynamic ballistics curve with sub-pixel precision for subtle motions and up to 4.5x acceleration for flick gestures across dual 4K displays.
+  * **Directional Mode**: Precise `↑` `↓` `←` `→` arrow keys and Enter.
+  * **Instant Mode Switching**: Press the remote's **Siri button** or switch in the Web Inspector. An OS-native notification banner will display on your Mac.
+* **Multimedia & Volume Integration**:
+  * **Single-click ⏯**: Play / Pause (interacts with macOS Now Playing for Apple Music, Spotify, Safari, YouTube, Bilibili, IINA).
+  * **Double-click ⏯**: Next Track (⏭).
+  * **Triple-click ⏯**: Previous Track (⏮).
+  * **Volume +/- & Mute**: Native translucent macOS volume HUD and bidirectional volume state synchronization.
 
 ---
 
+## 6. macOS Browser Real-Time Control UI (Web Inspector)
 
-## 1. macOS Usage
+When running on macOS, access the built-in diagnostic and remote control web consoles directly in your browser:
 
-### Direct Testing (Foreground)
-Run the CLI on your Mac:
-```bash
-# Starts server with macOS control (auto-detects your Mac's ComputerName):
-cargo run -p atv-cli -- --target mac --pin 1111 --open
-```
+* **Core Web Inspector (Touchpad & Remote)**: 👉 **`http://127.0.0.1:8765`**
+* **Swift Host Diagnostics & Runtime Logs**: 👉 **`http://127.0.0.1:8766`**
 
-Features on macOS:
-- **自动读取 Mac 机器名 (Auto Device Name)**: 自动通过 `scutil --get ComputerName` 获取当前 Mac 电脑名称并发布 Bonjour 广播（如 `Yuhao's MacBook`），iPhone 控制中心下拉遥控器直接显示本机名称（无需手动传参，也可用 `--name` 自定义覆盖）。
-- **设备专属唯一硬件标识 (Per-Device Unique Identity)**:
-  - 自动读取 macOS 硬件 UUID (`IOPlatformUUID`) 作为 Apple TV 专属配对识别码（`server_identifier` 与 AirPlay `pi`）。
-  - 自动读取本机真实网卡 MAC 地址（Wi-Fi / Ethernet）作为硬件设备 ID（`device_id` / `rpBA` / `rpHA`）。
-  - 基于设备硬件唯一标识生成持久私钥种子与 Bonjour 服务校验参数，**多台 Mac / 设备在同一局域网下各自拥有独立 ID，不再共享相同 ID**，彻底避免设备识别冲突或 iPhone 配对记录相互覆盖，且重启后配对凭证持续生效。
-- **程序内动态模式切换 (Directional Keys vs Mouse Cursor)**:
-  - **方向键模式 (上下左右)**: 遥控器滑动转换为方向键（↑ ↓ ← →），轻触中心或按下 **SELECT** 键为回车确认（Return / Enter）。
-  - **超流畅鼠标光标模式 (Smooth Mouse Cursor)**:
-    - 采用**本地坐标累加器 (Local Cursor Accumulator)**，彻底消除旧版本高频 IPC 查询 WindowServer 的异步竞态与抖动迟滞。
-    - 内置**动态加速度曲线 (Ballistics)**：微小移动（<1.5 像素）提供 1.15x 像素级精准定位，高速甩动自动加速至 4.5x，轻松横跨双屏 / 4K 大屏。
-    - 轻触或按下 **SELECT** 键直接执行鼠标左键单击（解决滑动后手抖点歪的问题），连续点击自动触发双击。
-  - **切换方式 (三端实时同步)**:
-    1. **终端交互**: 在运行中的终端中直接输入 `m` 并回车，随时切换模式。
-    2. **Web Inspector**: 在网页控制面板点击切换按钮。
-    3. **iPhone 遥控器**: 直接点击遥控器上的 **Siri / 语音键** 快捷切换，屏幕上会同步弹出 macOS 原生通知横幅！
-- **系统级多媒体控制 (Multimedia & Volume Controls)**:
-  - **播放 / 暂停 (Play / Pause)**: 映射 macOS 原生系统媒体键（`NX_KEYTYPE_PLAY`），联动系统级 Now Playing 守护进程，可直接控制正在播放的 Apple Music、Spotify、Safari / Chrome 网页视频（Bilibili、YouTube、Netflix）、IINA、QuickTime 等。
-  - **切歌手势 (Next / Prev)**:
-    - 因 iOS 控制中心 Apple TV 遥控器原生未提供单独的「上一曲/下一曲」物理按键，系统参考 Apple EarPods / AirPods 经典手势进行了深度映射：
-      - **单击 ⏯ 键**: 播放 / 暂停
-      - **双击 ⏯ 键**: 切换下一曲（Next Track ⏭，并在 Mac 上弹出通知）
-      - **三击 ⏯ 键**: 切换上一曲（Previous Track ⏮，并在 Mac 上弹出通知）
-    - 亦可在 Web Inspector 控制面板中直接点击专属的 `[⏮ Prev]` 与 `[⏭ Next]` 按钮进行调试测试。
-  - **系统音量调节 (Volume Up / Down / Mute)**: 映射 macOS 硬件音量键（`NX_KEYTYPE_SOUND_UP` / `DOWN` / `MUTE`），调节时屏幕弹出系统原生音量半透明 HUD 面板，并实时双向同步音量百分比与静音状态到 iPhone 遥控器。
+### 1. macOS Browser UI Mockup (Web Inspector)
 
-Options:
-- `--open`: Automatically opens the Web Debug UI in your default browser.
-- `--ui-port <PORT>`: Custom port for the Web Inspector (default: `8765`).
-- `--no-ui`: Disable the Web Inspector server.
-- `--mouse`: Initial start in trackpad mouse mode (can be toggled at runtime with `m` or from remote/web).
-- `--speed <0.2-3.0>`: Initial mouse speed / sensitivity multiplier (default: `0.5`, persisted in `~/.config/atv/settings.json`).
-- `--verbose-events`: Enable verbose terminal logging for buttons and events (default: quiet debug).
-- `--name "<Name>"`: Custom device name (defaults to current Mac's ComputerName on macOS).
-- `--device-id <MAC>`: Custom device MAC identifier (defaults to auto-detected hardware MAC).
-- `--server-id <UUID>`: Custom server UUID (defaults to auto-detected hardware UUID).
-- `--pin <0000-9999>`: Custom pairing PIN code (default: `1111`).
+![macOS Browser Web Inspector UI](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_browser_inspector.png)
 
-> **Important (Accessibility Permission)**:
-> Simulated keyboard and mouse events require Accessibility permissions in macOS.
-> Go to: **System Settings > Privacy & Security > Accessibility** and ensure your Terminal / iTerm / `atv-cli` is enabled.
+### 2. macOS Swift Host Diagnostics Web Page
 
-### Install as Background Service (macOS)
-Run the automated installation script:
-```bash
-./scripts/install_mac.sh
-```
-This builds the release binary, places it in `~/.local/bin/atv-cli`, and generates a `launchd` plist at `~/Library/LaunchAgents/com.corvofeng.atv-cli.plist`.
+![macOS Swift Host Diagnostics](https://github.com/corvofeng/atv-core/releases/download/v1.0.0/mac_debug_web_page.png)
 
-- **Start service**: `launchctl load ~/Library/LaunchAgents/com.corvofeng.atv-cli.plist`
-- **Stop service**: `launchctl unload ~/Library/LaunchAgents/com.corvofeng.atv-cli.plist`
-- **View logs**: `tail -f /tmp/atv-cli.log`
+### Features & Capabilities:
+* **Live Touchpad Canvas**: Visualizes finger coordinates, touch phases (`Began`, `Moved`, `Ended`), velocity, and relative displacement (`dx`, `dy`).
+* **Virtual Remote Controller**: Click virtual D-pad buttons, volume, and playback controls directly on your browser without reaching for your phone.
+* **Dynamic Sensitivity & Ballistics Controls**: Adjust mouse speed from 0.2x to 3.0x, select speed presets (`0.5x Precise`, `1.0x Standard`, `1.5x Fast`, `2.2x Ultra`), and toggle dynamic acceleration curves.
+* **Server-Sent Events (SSE) Protocol Stream**: Inspect raw encryption handshakes, session milestones, and keystroke events in real time.
 
 ---
 
-## 2. Web Inspector & Debug UI
+## 7. Protocol Key & Gesture Mapping Reference
 
-Whenever `atv-cli` runs (unless `--no-ui` is specified), a built-in real-time Web Inspector is available at:
-👉 **`http://127.0.0.1:8765`** (or access from your phone/tablet at `http://<LAN_IP>:8765`)
-
-Features:
-- **🎛️ 触摸板独立设置与状态记录 (Touchpad Settings & Record)**:
-  - **运行模式一键切换**: 「方向键模式 (上下左右)」与「鼠标光标模式 (Mouse Pointer)」。
-  - **动态灵敏度滑块 (0.2x ~ 3.0x)**: 支持像专业鼠标驱动一样无级拖动滑块，即时生效调节光标移动速度。
-  - **快速档位预设**: 提供 `0.5x 慢速精准`、`1.0x 标准默认`、`1.5x 快速顺畅`、`2.2x 极速大屏` 4 个常用档位一键直达。
-  - **动力学加速度曲线开关 (Ballistics vs Linear)**: 随时一键切换「动态加速度 (微移稳准、甩动极速)」或「1:1 纯线性匀速」。
-  - **详细事件日志级别动态控制**:
-    - 默认按键与高频事件降级为 `debug` 级别，终端保持干净清爽、不被频繁刷屏；
-    - 可在网页上随时一键切换 `🔇 静音 (Debug)` / `📢 详细输出 (Info)`，终端支持按 `v` 键热切换。
-  - **📋 实时配置与运行状态记录看板**: 记录当前运行模式、速度倍率、动力学曲线、SELECT 映射、macOS 主屏幕物理分辨率（如 `3840 × 2160`）与最后同步时间。
-- **Interactive Virtual Remote**: Click virtual buttons (D-pad Up/Down/Left/Right, Select, Back, Home, Play/Pause, Next/Prev, Mute, Volume +/-) on the webpage to directly test system responses on your Mac or Android TV without needing your phone.
-- **Real-Time Touchpad Preview**: Live canvas renders finger swipe paths, displacement (`dx`, `dy`), and touch phases (`Began`, `Moved`, `Ended`).
-- **Volume & Audio Gauge**: Live visualization of system volume percentage and mute state.
-- **Protocol & Event Log Stream**: Server-Sent Events (SSE) stream raw protocol frames, authentication steps, and connection milestones with millisecond timestamps.
-
----
-
-## 3. Android TV Usage
-
-### Option A: Direct Android TV App (APK)
-
-Install the app directly on your Android TV box/stick so your TV becomes discoverable as an Apple TV independently (no PC needed).
-
-#### Build & Install:
-1. Cross-compile the native Rust library for Android:
-   ```bash
-   ./scripts/build_android.sh
-   ```
-2. Or build using Android Studio by opening the `android-tv` directory.
-3. Install the APK to your TV:
-   ```bash
-   adb connect <TV_IP>:5555
-   adb install -r android-tv/app/build/outputs/apk/debug/app-debug.apk
-   ```
-4. Open **Apple TV Remote Receiver** on your Android TV:
-   - The screen shows the TV's IP, current status, and the 4-digit pairing PIN (`1111`).
-   - Click **Accessibility Settings** on the TV screen and enable the **Apple TV Remote Receiver** accessibility service. This grants permission to simulate Back, Home, Power, and D-pad actions without requiring root!
-
-### Option B: Remote ADB Mode (via Mac mini / PC)
-
-If you prefer to run the server on your Mac mini and forward all inputs to your Android TV over Wi-Fi ADB:
-
-```bash
-cargo run -p atv-cli -- --target android --android-host 192.168.1.100
-```
-- Automatically establishes a persistent `adb shell` connection.
-- Extremely low latency (<10ms).
-- Trackpad mouse mode (`--mouse`) sends `input roll` and `input tap` to the TV.
-
----
-
-## Protocol & Key Mapping
-
-| Apple TV Remote Control | macOS (Mac mini) Action | Android TV Action |
+| Apple TV Remote Action | Android TV Action | macOS (Mac mini / MacBook) Action |
 | :--- | :--- | :--- |
-| **Up / Down / Left / Right** | Arrow Up / Down / Left / Right | `KEYCODE_DPAD_UP` / `DOWN` / `LEFT` / `RIGHT` |
-| **Select (Center Click)** | Return (Enter) | `KEYCODE_DPAD_CENTER` / Node Click |
-| **Back / Menu (<)** | Escape | `GLOBAL_ACTION_BACK` (`KEYCODE_BACK`) |
-| **Home (TV Icon)** | Home key (or configurable) | `GLOBAL_ACTION_HOME` (`KEYCODE_HOME`) |
-| **Play / Pause** | Space | `KEYCODE_MEDIA_PLAY_PAUSE` |
-| **Volume Up / Down** | Adjust Master Output Volume | `KEYCODE_VOLUME_UP` / `DOWN` |
-| **Mute** | Toggle System Mute | `KEYCODE_VOLUME_MUTE` |
-| **Power** | Display Sleep (`pmset`) / Wake (`caffeinate`) | `GLOBAL_ACTION_POWER_DIALOG` / `KEYCODE_POWER` |
-| **Siri (Side Button)** | Launch Siri (`open -a Siri`) | Voice Search (`KEYCODE_SEARCH`) |
-| **Swipe Gestures** | Directional keys or Cursor Move | D-pad navigation or Mouse pointer |
-| **Tap (Mouse Mode)** | Left Mouse Click | Touch tap on screen |
+| **Trackpad Swipe (D-pad Mode)** | `KEYCODE_DPAD_UP` / `DOWN` / `LEFT` / `RIGHT` | Arrow Keys `↑` `↓` `←` `→` |
+| **Trackpad Swipe (Mouse Mode)** | Simulated Touch Drag / Pointer | Smooth Cursor (`CGEvent`) with Ballistics |
+| **Tap / Press SELECT** | `KEYCODE_DPAD_CENTER` / Click | Enter (Return) / Left Mouse Click |
+| **Back Button (`<`)** | `GLOBAL_ACTION_BACK` (`KEYCODE_BACK`) | `Escape` Key |
+| **TV / Home Button** | `GLOBAL_ACTION_HOME` (`KEYCODE_HOME`) | Return to Desktop / Custom Action |
+| **Single-click ⏯** | `KEYCODE_MEDIA_PLAY_PAUSE` | System Media Play / Pause (`NX_KEYTYPE_PLAY`) |
+| **Double-click ⏯** | Next Episode / Fast Forward | Next Track (⏭) |
+| **Triple-click ⏯** | Previous Episode / Rewind | Previous Track (⏮) |
+| **Volume Up / Down (`+/-`)** | `KEYCODE_VOLUME_UP` / `DOWN` | Hardware Volume Output + System HUD |
+| **Mute Button** | `KEYCODE_VOLUME_MUTE` | System Mute Toggle |
+| **Side Siri Button** | Voice Search (`KEYCODE_SEARCH`) | Mode Switch (Mouse ⇄ D-pad) or Siri |
+| **Power Button** | `GLOBAL_ACTION_POWER_DIALOG` | Display Sleep (`pmset`) / Wake |
+
+---
+
+## 8. Troubleshooting & FAQ
+
+### Q1: The device does not appear in iPhone Control Center.
+1. Ensure both devices are on the exact same Wi-Fi subnet.
+2. Verify Bonjour advertising with `dns-sd -B _mediaremotetv._tcp` on macOS.
+3. For Android TV Emulator, make sure `python3 scripts/bridge_emulator.py start` is running.
+
+### Q2: Android TV does not respond to remote inputs; logs show ADB connection errors.
+1. Go to TV **Developer Options** and ensure **Network ADB Debugging** is turned on.
+2. Watch the TV screen closely for the system RSA key fingerprint prompt: **check "Always allow" and click "Allow"**.
+3. If no prompt appears, manually authenticate once by running `adb connect <TV_IP>:5555` from your computer.
+
+### Q3: The TV does not have an Accessibility settings menu.
+Some regional TV ROMs hide the Accessibility page. You can enable the service via ADB:
+```bash
+adb shell settings put secure enabled_accessibility_services com.corvofeng.fakeatv/.AtvAccessibilityService
+adb shell settings put secure accessibility_enabled 1
+```
+
+### Q4: macOS shows "App is damaged and can't be opened".
+Remove the Gatekeeper quarantine attribute:
+```bash
+xattr -dr com.apple.quarantine /Applications/AppleTVRemote.app
+```
+Or import the project's self-signed certificate into your Keychain:
+```bash
+./scripts/import_certificate.sh Corvo_Development.p12
+```
+
+---
+
+## License
+
+This project is licensed under the MIT License.

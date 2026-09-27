@@ -79,3 +79,7 @@ Thumbs.db
 .atv-settings.json
 atv-settings.json
 
+# Documentation local generated assets (hosted on GitHub Release CDN / Issue comments)
+docs/images/
+
+
