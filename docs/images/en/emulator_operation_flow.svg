@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090d16"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+    <linearGradient id="box-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="shadow2" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <style>
+    .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 23px; font-weight: 700; fill: #f8fafc; }
+    .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #94a3b8; }
+    .step-num { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 800; fill: #38bdf8; }
+    .heading { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #f1f5f9; }
+    .desc { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 12px; fill: #94a3b8; }
+    .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #34d399; }
+    .port { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 600; fill: #fbbf24; }
+  </style>
+
+  <rect width="1000" height="620" rx="16" fill="url(#bg-grad2)"/>
+  <rect width="998" height="618" x="1" y="1" rx="15" fill="none" stroke="#334155" stroke-width="1.5" stroke-opacity="0.6"/>
+
+  <g transform="translate(40, 45)">
+    <text class="title">Android TV Emulator Debugging &amp; Bridge Workflow</text>
+    <text y="24" class="subtitle">Bridges host-only emulator sandbox NAT (10.0.2.15) to physical Wi-Fi network for physical iPhone discovery</text>
+  </g>
+
+  <!-- Step 1 -->
+  <g transform="translate(40, 105)" filter="url(#shadow2)">
+    <rect width="210" height="220" rx="12" fill="url(#box-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="14" y="14" width="28" height="28" rx="6" fill="#0284c7" fill-opacity="0.2"/>
+    <text x="28" y="33" text-anchor="middle" class="step-num">01</text>
+    <text x="52" y="33" class="heading">Launch TV Emulator</text>
+    <text x="16" y="65" class="desc">Start Android TV AVD</text>
+    <text x="16" y="83" class="desc">via Studio or Terminal</text>
+    <text x="16" y="110" class="cmd">$ emulator -avd \</text>
+    <text x="24" y="126" class="cmd">  Android_TV_4K</text>
+    <rect x="14" y="150" width="182" height="52" rx="6" fill="#090d16" stroke="#1e293b"/>
+    <text x="24" y="170" class="desc" font-size="11">Virtual IP: 10.0.2.15</text>
+    <text x="24" y="188" class="desc" font-size="11">ADB Port: 5554 (Internal 5555)</text>
+  </g>
+
+  <!-- Arrow 1->2 -->
+  <path d="M 252 215 L 283 215" stroke="#38bdf8" stroke-width="2"/>
+  <polygon points="280,211 288,215 280,219" fill="#38bdf8"/>
+
+  <!-- Step 2 -->
+  <g transform="translate(285, 105)" filter="url(#shadow2)">
+    <rect width="210" height="220" rx="12" fill="url(#box-grad)" stroke="#0284c7" stroke-width="1.5"/>
+    <rect x="14" y="14" width="28" height="28" rx="6" fill="#0284c7" fill-opacity="0.3"/>
+    <text x="28" y="33" text-anchor="middle" class="step-num">02</text>
+    <text x="52" y="33" class="heading">Run Bridge Suite</text>
+    <text x="16" y="65" class="desc">Auto ADB port forwarding</text>
+    <text x="16" y="83" class="desc">&amp; proxy Bonjour mDNS</text>
+    <text x="16" y="110" class="cmd">$ python3 scripts/ \</text>
+    <text x="24" y="126" class="cmd">  bridge_emulator.py start</text>
+    <rect x="14" y="150" width="182" height="52" rx="6" fill="#090d16" stroke="#1e293b"/>
+    <text x="24" y="170" class="port">adb forward tcp:49152</text>
+    <text x="24" y="188" class="port">adb forward tcp:49153</text>
+  </g>
+
+  <!-- Arrow 2->3 -->
+  <path d="M 497 215 L 528 215" stroke="#38bdf8" stroke-width="2"/>
+  <polygon points="525,211 533,215 525,219" fill="#38bdf8"/>
+
+  <!-- Step 3 -->
+  <g transform="translate(530, 105)" filter="url(#shadow2)">
+    <rect width="210" height="220" rx="12" fill="url(#box-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="14" y="14" width="28" height="28" rx="6" fill="#8b5cf6" fill-opacity="0.2"/>
+    <text x="28" y="33" text-anchor="middle" class="step-num" fill="#a78bfa">03</text>
+    <text x="52" y="33" class="heading">Host mDNS Broadcast</text>
+    <text x="16" y="65" class="desc">Proxy advertises Bonjour</text>
+    <text x="16" y="83" class="desc">services on host Wi-Fi LAN</text>
+    <text x="16" y="110" class="code" font-size="10">_mediaremotetv._tcp</text>
+    <text x="16" y="128" class="code" font-size="10">_companion-link._tcp</text>
+    <rect x="14" y="150" width="182" height="52" rx="6" fill="#090d16" stroke="#1e293b"/>
+    <text x="24" y="170" class="desc" font-size="11">Device: Android TV</text>
+    <text x="24" y="188" class="desc" font-size="11">IP: Mac Host Physical LAN IP</text>
+  </g>
+
+  <!-- Arrow 3->4 -->
+  <path d="M 742 215 L 773 215" stroke="#38bdf8" stroke-width="2"/>
+  <polygon points="770,211 778,215 770,219" fill="#38bdf8"/>
+
+  <!-- Step 4 -->
+  <g transform="translate(775, 105)" filter="url(#shadow2)">
+    <rect width="185" height="220" rx="12" fill="url(#box-grad)" stroke="#10b981" stroke-width="1.5"/>
+    <rect x="14" y="14" width="28" height="28" rx="6" fill="#10b981" fill-opacity="0.2"/>
+    <text x="28" y="33" text-anchor="middle" class="step-num" fill="#34d399">04</text>
+    <text x="52" y="33" class="heading">Discover &amp; Pair</text>
+    <text x="16" y="65" class="desc">Swipe down iOS Control</text>
+    <text x="16" y="83" class="desc">Center &amp; tap TV Remote</text>
+    <rect x="14" y="105" width="157" height="36" rx="6" fill="#1e293b"/>
+    <text x="24" y="127" class="label" fill="#93c5fd">Pairing PIN: 1111</text>
+    <rect x="14" y="150" width="157" height="52" rx="6" fill="#090d16" stroke="#1e293b"/>
+    <text x="24" y="170" class="desc" font-size="11" fill="#34d399">● TLS Session Active</text>
+    <text x="24" y="188" class="desc" font-size="11">Direct zero-lag control</text>
+  </g>
+
+  <!-- Bottom Panel -->
+  <g transform="translate(40, 350)" filter="url(#shadow2)">
+    <rect width="920" height="230" rx="14" fill="url(#box-grad)" stroke="#334155" stroke-width="1.5"/>
+    <text x="24" y="32" class="heading" font-size="16">Underlying Network Port Forwarding Topology</text>
+    
+    <!-- Left Lane -->
+    <g transform="translate(24, 55)">
+      <rect width="250" height="150" rx="8" fill="#0f172a" stroke="#3b82f6" stroke-width="1.2"/>
+      <text x="16" y="26" class="heading" fill="#60a5fa" font-size="13">Physical Wi-Fi Network</text>
+      <text x="16" y="44" class="desc">iPhone / iPad Control Center</text>
+      <path d="M 16 58 L 234 58" stroke="#1e293b" stroke-width="1"/>
+      <text x="16" y="78" class="desc">mDNS Discovery: UDP 5353</text>
+      <text x="16" y="98" class="desc">TCP Target: Host Physical LAN IP</text>
+      <text x="16" y="125" class="code" font-size="10">Ports: 49152 (MRP) / 49153 (C-Link)</text>
+    </g>
+
+    <!-- Mid Lane -->
+    <g transform="translate(335, 55)">
+      <rect width="250" height="150" rx="8" fill="#0f172a" stroke="#0284c7" stroke-width="1.2"/>
+      <text x="16" y="26" class="heading" fill="#38bdf8" font-size="13">Host Mac (Bridge Suite)</text>
+      <text x="16" y="44" class="desc">bridge_emulator.py + ADB</text>
+      <path d="M 16 58 L 234 58" stroke="#1e293b" stroke-width="1"/>
+      <text x="16" y="80" class="port">adb forward tcp:49152</text>
+      <text x="16" y="102" class="port">adb forward tcp:49153</text>
+      <text x="16" y="124" class="port">adb forward tcp:49154</text>
+      <text x="16" y="142" class="desc" font-size="10">Transparent port forwarding</text>
+    </g>
+
+    <!-- Right Lane -->
+    <g transform="translate(645, 55)">
+      <rect width="250" height="150" rx="8" fill="#0f172a" stroke="#10b981" stroke-width="1.2"/>
+      <text x="16" y="26" class="heading" fill="#34d399" font-size="13">Guest AVD Sandbox</text>
+      <text x="16" y="44" class="desc">com.corvofeng.fakeatv</text>
+      <path d="M 16 58 L 234 58" stroke="#1e293b" stroke-width="1"/>
+      <text x="16" y="78" class="desc">libatv_android.so binds 0.0.0.0</text>
+      <text x="16" y="98" class="desc">dadb connects 127.0.0.1:5555</text>
+      <text x="16" y="122" class="cmd" font-size="10">input keyevent KEYCODE_*</text>
+      <text x="16" y="138" class="desc" font-size="10">or Accessibility fallback</text>
+    </g>
+
+    <path d="M 276 130 L 333 130" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3 3"/>
+    <polygon points="328,126 335,130 328,134" fill="#38bdf8"/>
+
+    <path d="M 587 130 L 643 130" stroke="#10b981" stroke-width="2" stroke-dasharray="3 3"/>
+    <polygon points="638,126 645,130 638,134" fill="#10b981"/>
+  </g>
+</svg>
