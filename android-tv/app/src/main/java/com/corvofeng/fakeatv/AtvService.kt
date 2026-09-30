@@ -142,7 +142,11 @@ class AtvService : Service(), AtvNative.Callback {
                 addAction(Intent.ACTION_USER_PRESENT)
                 addAction(ACTION_SET_MENU_BINDING)
             }
-            registerReceiver(receiver, filter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(receiver, filter)
+            }
             screenReceiver = receiver
         } catch (e: Exception) {
             Log.w(TAG, "Failed to register screen receiver", e)
