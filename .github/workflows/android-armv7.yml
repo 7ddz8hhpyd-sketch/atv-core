@@ -1,0 +1,36 @@
+name: Android APK (armeabi-v7a + arm64-v8a)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Configure NDK
+        run: |
+          NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 | sort -V | tail -n1)
+          [ -z "$NDK_PATH" ] && NDK_PATH="$ANDROID_NDK_ROOT"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Build debug APK
+        run: |
+          chmod +x ./scripts/*.sh ./android-tv/gradlew
+          ./scripts/build_android.sh debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FakeAtv-debug
+          path: android-tv/app/build/outputs/apk/debug/*.apk
