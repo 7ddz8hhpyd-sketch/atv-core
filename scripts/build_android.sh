@@ -47,7 +47,7 @@ mkdir -p "$JNILIBS_DIR"
 
 if command -v cargo-ndk &> /dev/null; then
     echo "Found cargo-ndk, building arm64-v8a release..."
-    cargo ndk -t arm64-v8a -o "$ROOT_DIR/android-tv/app/src/main/jniLibs" build --release -p atv-android
+    cargo ndk -t armeabi-v7a -t arm64-v8a -o "$ROOT_DIR/android-tv/app/src/main/jniLibs" build --release -p atv-android
 else
     echo "cargo-ndk not found. Checking standard cargo build..."
     cargo build --target "$TARGET" --release -p atv-android
